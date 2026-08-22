@@ -43,27 +43,31 @@ matched to the selected DXGI adapter by LUID.
 
 ## Optional HWiNFO temperatures
 
-HWiNFO is optional and is not bundled with this mod. Temperatures are read in
-this order:
+HWiNFO is optional and is not bundled with this mod. The **Temperature source**
+setting provides four modes:
 
-1. Shared memory `Global\HWiNFO_SENS_SM2`.
-2. Gadget registry `HKCU\Software\HWiNFO64\VSB`.
+- **Automatic** reads shared memory first and fills missing values from the
+  Gadget registry.
+- **HWiNFO Shared Memory** uses only `Global\HWiNFO_SENS_SM2`.
+- **HWiNFO Gadget Registry** uses only
+  `HKCU\Software\HWiNFO64\VSB`.
+- **Disabled** skips temperature collection while keeping every other metric.
 
 Shared-memory integration targets HWiNFO 7.0 or newer, which permits full
 disclosure of the interface. The free HWiNFO64 edition disables shared memory
 after 12 hours of continuous use; HWiNFO64 Pro has no such limit.
 
-For the Gadget fallback, enable **Report to Gadget** under
-**Sensor Settings > HWiNFO Gadget**. HWiNFO and Explorer must run under the
-same Windows user. The automatic sensor matcher prefers:
+Gadget Registry is a separate HWiNFO interface. Enable **Report to Gadget**
+under **Sensor Settings > HWiNFO Gadget**. HWiNFO and Explorer must run under
+the same Windows user. The automatic sensor matcher prefers:
 
 - CPU: `CPU (Tctl/Tdie)`, `CPU Die (average)`, or `CPU Package`.
 - GPU: `GPU Temperature`.
 
 Partial sensor-name filters are available in the mod settings.
 
-If neither source is available, temperatures are shown as `--°C`; CPU, GPU,
-RAM, and VRAM monitoring continues to work.
+If the selected source is unavailable, temperatures are shown as `--°C`; CPU,
+GPU, RAM, and VRAM monitoring continues to work.
 
 ## Default alerts
 

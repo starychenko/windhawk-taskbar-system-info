@@ -43,7 +43,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -59,7 +59,7 @@ def main() -> int:
 
     settings = yaml.safe_load(extract_block(source, "WindhawkModSettings"))
     assert isinstance(settings, list), "Settings root must be a YAML list"
-    assert len(settings) == 22, f"Expected 22 settings, got {len(settings)}"
+    assert len(settings) == 23, f"Expected 23 settings, got {len(settings)}"
 
     setting_keys: set[str] = set()
     for index, item in enumerate(settings):
@@ -77,6 +77,23 @@ def main() -> int:
                     f"{type(item[localized_key]).__name__}"
                 )
 
+    temperature_source = next(
+        item for item in settings if "temperatureSource" in item
+    )
+    assert temperature_source["temperatureSource"] == "auto"
+    expected_temperature_sources = {
+        "auto",
+        "sharedMemory",
+        "gadgetRegistry",
+        "disabled",
+    }
+    for options_key in ("$options", "$options:uk-UA"):
+        options = temperature_source.get(options_key)
+        assert isinstance(options, list), f"temperatureSource.{options_key} missing"
+        assert {
+            str(next(iter(option))) for option in options if isinstance(option, dict)
+        } == expected_temperature_sources
+
     readme = extract_block(source, "WindhawkModReadme")
     assert "raw.githubusercontent.com/starychenko/windhawk-taskbar-system-info/" in readme
 
@@ -92,6 +109,11 @@ def main() -> int:
     assert "HWiNFO_SENS_SM2" in source
     assert "ReadHwInfoSharedMemory" in source
     assert "Software\\\\HWiNFO64\\\\VSB" in source
+    assert "enum class TemperatureSource" in source
+    assert "case TemperatureSource::SharedMemory:" in source
+    assert "case TemperatureSource::GadgetRegistry:" in source
+    assert "case TemperatureSource::Disabled:" in source
+    assert "NormalizeRegistryTemperature" in source
     assert "static_assert(offsetof(HwInfoHeader, pollTime) == 12);" in source
     assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
 

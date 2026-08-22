@@ -9,6 +9,11 @@ $compilerPath = Join-Path $WindhawkRoot 'Compiler\bin\clang++.exe'
 $compilerWorkingDirectory = Join-Path $WindhawkRoot 'Compiler'
 $sourcePath = Join-Path $PSScriptRoot 'taskbar-system-info.wh.cpp'
 
+if (-not [System.IO.Path]::IsPathRooted($OutputDirectory)) {
+    $OutputDirectory = Join-Path $PSScriptRoot $OutputDirectory
+}
+$OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
+
 foreach ($requiredPath in @($compilerPath, $sourcePath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Required path not found: $requiredPath"
