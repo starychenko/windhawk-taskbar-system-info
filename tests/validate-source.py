@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_PATH = ROOT / "taskbar-system-info.wh.cpp"
+
+
+def extract_block(source: str, name: str) -> str:
+    match = re.search(
+        rf"// =={re.escape(name)}==\s*/\*\s*(.*?)\s*\*/\s*// ==/{re.escape(name)}==",
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        raise AssertionError(f"Missing {name} block")
+    return match.group(1)
+
+
+def parse_metadata(source: str) -> dict[str, str]:
+    match = re.search(
+        r"// ==WindhawkMod==\s*(.*?)\s*// ==/WindhawkMod==",
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        raise AssertionError("Missing WindhawkMod metadata block")
+
+    metadata: dict[str, str] = {}
+    for key, value in re.findall(r"^//\s+@(\S+)\s+(.+?)\s*$", match.group(1), re.MULTILINE):
+        metadata[key] = value
+    return metadata
+
+
+def main() -> int:
+    source = SOURCE_PATH.read_text(encoding="utf-8")
+    metadata = parse_metadata(source)
+
+    expected = {
+        "id": "taskbar-system-info",
+        "version": "1.0.0",
+        "author": "Yevhenii Starychenko",
+        "github": "https://github.com/starychenko",
+        "license": "GPL-3.0",
+        "architecture": "amd64",
+    }
+    for key, value in expected.items():
+        assert metadata.get(key) == value, f"Unexpected @{key}: {metadata.get(key)!r}"
+
+    assert metadata.get("name")
+    assert metadata.get("description")
+    assert metadata.get("name:uk-UA")
+    assert metadata.get("description:uk-UA")
+
+    settings = yaml.safe_load(extract_block(source, "WindhawkModSettings"))
+    assert isinstance(settings, list), "Settings root must be a YAML list"
+    assert len(settings) == 22, f"Expected 22 settings, got {len(settings)}"
+
+    setting_keys: set[str] = set()
+    for index, item in enumerate(settings):
+        assert isinstance(item, dict), f"Setting #{index + 1} must be a mapping"
+        value_keys = [key for key in item if not str(key).startswith("$")]
+        assert len(value_keys) == 1, f"Setting #{index + 1} must have one value key"
+        key = str(value_keys[0])
+        assert key not in setting_keys, f"Duplicate setting: {key}"
+        setting_keys.add(key)
+
+        for localized_key in ("$name", "$name:uk-UA", "$description", "$description:uk-UA"):
+            if localized_key in item:
+                assert isinstance(item[localized_key], str), (
+                    f"{key}.{localized_key} must be a string, got "
+                    f"{type(item[localized_key]).__name__}"
+                )
+
+    readme = extract_block(source, "WindhawkModReadme")
+    assert "raw.githubusercontent.com/starychenko/windhawk-taskbar-system-info/" in readme
+
+    print(
+        "Source validation OK: "
+        f"{metadata['id']} v{metadata['version']}, {len(settings)} settings"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except (AssertionError, OSError, yaml.YAMLError) as error:
+        print(f"Source validation failed: {error}", file=sys.stderr)
+        raise SystemExit(1)

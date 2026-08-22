@@ -1,0 +1,171 @@
+#include <windows.h>
+
+#include <dxgi.h>
+#include <pdh.h>
+#include <pdhmsg.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cwctype>
+#include <iostream>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace {
+
+constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+
+std::wstring ToLower(std::wstring value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
+        return static_cast<wchar_t>(std::towlower(ch));
+    });
+    return value;
+}
+
+bool ReadArray(PDH_HCOUNTER counter,
+               std::vector<unsigned char>& buffer,
+               DWORD& count) {
+    DWORD size = 0;
+    PDH_STATUS status = PdhGetFormattedCounterArrayW(
+        counter, PDH_FMT_DOUBLE, &size, &count, nullptr);
+    if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) || !size) {
+        return false;
+    }
+    buffer.resize(size);
+    return PdhGetFormattedCounterArrayW(
+               counter, PDH_FMT_DOUBLE, &size, &count,
+               reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data())) ==
+           ERROR_SUCCESS;
+}
+
+}  // namespace
+
+int wmain() {
+    IDXGIFactory* factory = nullptr;
+    if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory),
+                                 reinterpret_cast<void**>(&factory)))) {
+        std::wcerr << L"DXGI factory failed\n";
+        return 1;
+    }
+
+    DXGI_ADAPTER_DESC selected{};
+    bool found = false;
+    for (UINT index = 0;; index++) {
+        IDXGIAdapter* adapter = nullptr;
+        HRESULT result = factory->EnumAdapters(index, &adapter);
+        if (result == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+        if (SUCCEEDED(result) && adapter) {
+            DXGI_ADAPTER_DESC description{};
+            if (SUCCEEDED(adapter->GetDesc(&description)) &&
+                (!found || description.DedicatedVideoMemory >
+                               selected.DedicatedVideoMemory)) {
+                selected = description;
+                found = true;
+            }
+            adapter->Release();
+        }
+    }
+    factory->Release();
+    if (!found || !selected.DedicatedVideoMemory) {
+        std::wcerr << L"No dedicated GPU found\n";
+        return 2;
+    }
+
+    wchar_t luidBuffer[32];
+    swprintf(luidBuffer, std::size(luidBuffer), L"0x%08X_0x%08X",
+             selected.AdapterLuid.HighPart, selected.AdapterLuid.LowPart);
+    std::wstring luid = ToLower(luidBuffer);
+
+    PDH_HQUERY query = nullptr;
+    PDH_HCOUNTER gpuCounter = nullptr;
+    PDH_HCOUNTER vramCounter = nullptr;
+    if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS ||
+        PdhAddEnglishCounterW(query,
+                              L"\\GPU Engine(*)\\Utilization Percentage", 0,
+                              &gpuCounter) != ERROR_SUCCESS ||
+        PdhAddEnglishCounterW(query,
+                              L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0,
+                              &vramCounter) != ERROR_SUCCESS) {
+        std::wcerr << L"PDH setup failed\n";
+        if (query) {
+            PdhCloseQuery(query);
+        }
+        return 3;
+    }
+
+    PdhCollectQueryData(query);
+    Sleep(1100);
+    if (PdhCollectQueryData(query) != ERROR_SUCCESS) {
+        PdhCloseQuery(query);
+        return 4;
+    }
+
+    std::vector<unsigned char> buffer;
+    DWORD count = 0;
+    std::unordered_map<std::wstring, double> engines;
+    if (ReadArray(gpuCounter, buffer, count)) {
+        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
+            buffer.data());
+        for (DWORD i = 0; i < count; i++) {
+            std::wstring instance =
+                items[i].szName ? ToLower(items[i].szName) : L"";
+            double value = items[i].FmtValue.doubleValue;
+            if (instance.find(luid) == std::wstring::npos ||
+                !std::isfinite(value) || value < 0.0) {
+                continue;
+            }
+            size_t luidPosition = instance.find(L"luid_");
+            std::wstring key = luidPosition == std::wstring::npos
+                                   ? instance
+                                   : instance.substr(luidPosition);
+            engines[key] += value;
+        }
+    }
+
+    double gpuUsage = 0.0;
+    for (const auto& [engine, value] : engines) {
+        gpuUsage = std::max(gpuUsage, value);
+    }
+    gpuUsage = std::clamp(gpuUsage, 0.0, 100.0);
+
+    buffer.clear();
+    count = 0;
+    double vramBytes = 0.0;
+    bool vramFound = false;
+    if (ReadArray(vramCounter, buffer, count)) {
+        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
+            buffer.data());
+        for (DWORD i = 0; i < count; i++) {
+            std::wstring instance =
+                items[i].szName ? ToLower(items[i].szName) : L"";
+            double value = items[i].FmtValue.doubleValue;
+            if (instance.find(luid) == std::wstring::npos ||
+                !std::isfinite(value) || value < 0.0) {
+                continue;
+            }
+            vramBytes += value;
+            vramFound = true;
+        }
+    }
+    PdhCloseQuery(query);
+
+    double totalGb = static_cast<double>(selected.DedicatedVideoMemory) / kGiB;
+    double usedGb = vramBytes / kGiB;
+    double percent = totalGb > 0.0 ? usedGb / totalGb * 100.0 : 0.0;
+
+    std::wcout << L"GPU=" << selected.Description << L"\n"
+               << L"LUID=" << luid << L"\n"
+               << L"GPU_USAGE=" << gpuUsage << L"%\n"
+               << L"VRAM=" << usedGb << L"/" << totalGb << L" GiB ("
+               << percent << L"%)\n";
+
+    if (!vramFound || gpuUsage < 0.0 || gpuUsage > 100.0 || usedGb < 0.0 ||
+        usedGb > totalGb * 1.25) {
+        std::wcerr << L"Metric validation failed\n";
+        return 5;
+    }
+    return 0;
+}
