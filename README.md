@@ -19,6 +19,12 @@ values remain monochrome; only warning and critical readings receive color.
 
 Network and disk activity are intentionally not collected.
 
+Unlike the performance placeholders in
+[Taskbar Clock Customization](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-clock-customization.wh.cpp),
+this mod does not alter the clock. It uses the free far-left taskbar area for a
+stable 2x2 dashboard with rolling graphs, capacity bars, temperature alerts and
+fixed-width values.
+
 ## Metrics
 
 - CPU utilization from `GetSystemTimes`.
@@ -27,6 +33,9 @@ Network and disk activity are intentionally not collected.
 - Dedicated VRAM usage from `GPU Adapter Memory(*)\Dedicated Usage`.
 - Dedicated VRAM capacity and adapter identity from DXGI.
 - CPU and GPU temperatures from HWiNFO when available.
+
+Metric collection runs on a worker thread. The taskbar UI thread only renders
+the latest completed snapshot.
 
 The adapter with the most dedicated VRAM is selected automatically. A partial
 adapter-name filter is available for multi-GPU systems. GPU usage and VRAM are
@@ -66,7 +75,8 @@ are not automatically a problem.
 
 ## Compatibility and placement
 
-- Windows 11 x64, primary taskbar.
+- Windows 11 64-bit, primary taskbar. x64 is hardware-tested; ARM64 is
+  compilation-tested.
 - Centered taskbar icons are recommended.
 - Enable **Reserve space before the Start button** if the widget overlaps
   left-aligned taskbar buttons.

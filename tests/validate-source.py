@@ -80,6 +80,19 @@ def main() -> int:
     readme = extract_block(source, "WindhawkModReadme")
     assert "raw.githubusercontent.com/starychenko/windhawk-taskbar-system-info/" in readme
 
+    assert "[[clang::no_destroy]] Grid g_widget{nullptr};" in source
+    assert "std::optional<std::thread> g_metricsWorker" in source
+    assert "std::optional<std::list<FrameworkElement::Loaded_revoker>>" in source
+    assert "#elif defined(_M_ARM64)" in source
+    assert "0xD503237F" in source
+
+    mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
+    assert "EnsurePdhQuery();" not in mod_init, "PDH must be initialized lazily"
+    update_widget = source[
+        source.index("void UpdateWidgetText()") : source.index("void EnsureTimer()")
+    ]
+    assert "CollectMetrics(" not in update_widget, "Metrics must stay off the UI thread"
+
     print(
         "Source validation OK: "
         f"{metadata['id']} v{metadata['version']}, {len(settings)} settings"

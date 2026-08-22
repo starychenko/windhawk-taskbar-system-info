@@ -85,7 +85,6 @@ $compilerArguments = @(
     '-lruntimeobject'
     '-lpdh'
     '-ldxgi'
-    '-lversion'
 )
 
 Push-Location $compilerWorkingDirectory
