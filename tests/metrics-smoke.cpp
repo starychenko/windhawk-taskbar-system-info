@@ -82,6 +82,7 @@ int wmain() {
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER gpuCounter = nullptr;
     PDH_HCOUNTER vramCounter = nullptr;
+    PDH_HCOUNTER thermalCounter = nullptr;
     if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS ||
         PdhAddEnglishCounterW(query,
                               L"\\GPU Engine(*)\\Utilization Percentage", 0,
@@ -94,6 +95,13 @@ int wmain() {
             PdhCloseQuery(query);
         }
         return 3;
+    }
+
+    PDH_STATUS thermalStatus = PdhAddEnglishCounterW(
+        query, L"\\Thermal Zone Information(*)\\Temperature", 0,
+        &thermalCounter);
+    if (thermalStatus != ERROR_SUCCESS) {
+        thermalCounter = nullptr;
     }
 
     PdhCollectQueryData(query);
@@ -150,6 +158,32 @@ int wmain() {
             vramFound = true;
         }
     }
+
+    buffer.clear();
+    count = 0;
+    double thermalSumCelsius = 0.0;
+    double thermalHottestCelsius = 0.0;
+    size_t thermalCount = 0;
+    if (ReadArray(thermalCounter, buffer, count)) {
+        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
+            buffer.data());
+        for (DWORD i = 0; i < count; i++) {
+            const auto& value = items[i].FmtValue;
+            if ((value.CStatus != PDH_CSTATUS_VALID_DATA &&
+                 value.CStatus != PDH_CSTATUS_NEW_DATA) ||
+                !std::isfinite(value.doubleValue) ||
+                value.doubleValue < 200.0 || value.doubleValue > 473.15) {
+                continue;
+            }
+
+            double celsius = value.doubleValue - 273.15;
+            thermalSumCelsius += celsius;
+            thermalHottestCelsius =
+                thermalCount ? std::max(thermalHottestCelsius, celsius)
+                             : celsius;
+            thermalCount++;
+        }
+    }
     PdhCloseQuery(query);
 
     double totalGb = static_cast<double>(selected.DedicatedVideoMemory) / kGiB;
@@ -161,6 +195,16 @@ int wmain() {
                << L"GPU_USAGE=" << gpuUsage << L"%\n"
                << L"VRAM=" << usedGb << L"/" << totalGb << L" GiB ("
                << percent << L"%)\n";
+    if (thermalCount) {
+        std::wcout << L"WINDOWS_THERMAL_ZONES=" << thermalCount
+                   << L" average=" << thermalSumCelsius / thermalCount
+                   << L" C hottest=" << thermalHottestCelsius << L" C\n";
+    } else {
+        std::wcout << L"WINDOWS_THERMAL_ZONES=unavailable"
+                   << L" add_status=0x" << std::hex
+                   << static_cast<unsigned long>(thermalStatus) << std::dec
+                   << L"\n";
+    }
 
     if (!vramFound || gpuUsage < 0.0 || gpuUsage > 100.0 || usedGb < 0.0 ||
         usedGb > totalGb * 1.25) {

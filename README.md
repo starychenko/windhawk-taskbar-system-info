@@ -33,6 +33,7 @@ fixed-width values.
 - Dedicated VRAM usage from `GPU Adapter Memory(*)\Dedicated Usage`.
 - Dedicated VRAM capacity and adapter identity from DXGI.
 - CPU and GPU temperatures from HWiNFO when available.
+- CPU fallback from Windows ACPI thermal zones exposed through PDH.
 
 Metric collection runs on a worker thread. The taskbar UI thread only renders
 the latest completed snapshot.
@@ -41,17 +42,31 @@ The adapter with the most dedicated VRAM is selected automatically. A partial
 adapter-name filter is available for multi-GPU systems. GPU usage and VRAM are
 matched to the selected DXGI adapter by LUID.
 
-## Optional HWiNFO temperatures
+## Temperature providers
 
-HWiNFO is optional and is not bundled with this mod. The **Temperature source**
-setting provides four modes:
+The **Temperature source** setting provides these modes:
 
-- **Automatic** reads shared memory first and fills missing values from the
-  Gadget registry.
+- **Automatic** fills CPU and GPU independently: HWiNFO Shared Memory first,
+  then HWiNFO Gadget Registry, then Windows thermal zones for a still-missing
+  CPU reading.
+- **HWiNFO automatic** uses only the two HWiNFO interfaces.
 - **HWiNFO Shared Memory** uses only `Global\HWiNFO_SENS_SM2`.
 - **HWiNFO Gadget Registry** uses only
   `HKCU\Software\HWiNFO64\VSB`.
+- **Windows thermal zones** reads the Windows
+  `\Thermal Zone Information(*)\Temperature` PDH counter, matching Taskbar Clock
+  Customization. It needs no third-party monitor, but supplies CPU only.
 - **Disabled** skips temperature collection while keeping every other metric.
+
+Windows thermal zones are ACPI platform zones. Depending on the firmware they
+can represent a motherboard, chassis, skin, or processor-related zone rather
+than the CPU package itself. The optional instance-name filter selects specific
+zones. The aggregation setting defaults to the average used by Taskbar Clock
+Customization; **Hottest** is available for alert-oriented monitoring. Systems
+that don't expose thermal zones simply fall through without blocking other
+metrics.
+
+HWiNFO is optional and is not bundled with this mod.
 
 Shared-memory integration targets HWiNFO 7.0 or newer, which permits full
 disclosure of the interface. The free HWiNFO64 edition disables shared memory
@@ -64,10 +79,11 @@ the same Windows user. The automatic sensor matcher prefers:
 - CPU: `CPU (Tctl/Tdie)`, `CPU Die (average)`, or `CPU Package`.
 - GPU: `GPU Temperature`.
 
-Partial sensor-name filters are available in the mod settings.
+Partial HWiNFO sensor-name filters are available in the mod settings.
 
 If the selected source is unavailable, temperatures are shown as `--°C`; CPU,
-GPU, RAM, and VRAM monitoring continues to work.
+GPU, RAM, and VRAM monitoring continues to work. The active CPU and GPU
+providers are logged only when they change.
 
 ## Default alerts
 
@@ -116,8 +132,8 @@ python .\tests\validate-source.py
 ```
 
 The local build uses the compiler bundled with Windhawk. The smoke-test queries
-live DXGI and PDH state, verifies that both sources select the same GPU, and
-checks GPU and VRAM ranges.
+live DXGI and PDH state, verifies that both sources select the same GPU, checks
+GPU and VRAM ranges, and reports whether Windows exposes usable thermal zones.
 
 ## Credits and license
 

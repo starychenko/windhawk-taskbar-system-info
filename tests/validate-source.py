@@ -43,7 +43,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -59,7 +59,7 @@ def main() -> int:
 
     settings = yaml.safe_load(extract_block(source, "WindhawkModSettings"))
     assert isinstance(settings, list), "Settings root must be a YAML list"
-    assert len(settings) == 23, f"Expected 23 settings, got {len(settings)}"
+    assert len(settings) == 25, f"Expected 25 settings, got {len(settings)}"
 
     setting_keys: set[str] = set()
     for index, item in enumerate(settings):
@@ -83,8 +83,10 @@ def main() -> int:
     assert temperature_source["temperatureSource"] == "auto"
     expected_temperature_sources = {
         "auto",
+        "hwinfoAuto",
         "sharedMemory",
         "gadgetRegistry",
+        "windowsThermalZones",
         "disabled",
     }
     for options_key in ("$options", "$options:uk-UA"):
@@ -93,6 +95,19 @@ def main() -> int:
         assert {
             str(next(iter(option))) for option in options if isinstance(option, dict)
         } == expected_temperature_sources
+
+    thermal_zone_aggregation = next(
+        item for item in settings if "windowsThermalZoneAggregation" in item
+    )
+    assert thermal_zone_aggregation["windowsThermalZoneAggregation"] == "average"
+    for options_key in ("$options", "$options:uk-UA"):
+        options = thermal_zone_aggregation.get(options_key)
+        assert isinstance(options, list), (
+            f"windowsThermalZoneAggregation.{options_key} missing"
+        )
+        assert {
+            str(next(iter(option))) for option in options if isinstance(option, dict)
+        } == {"average", "hottest"}
 
     readme = extract_block(source, "WindhawkModReadme")
     assert "raw.githubusercontent.com/starychenko/windhawk-taskbar-system-info/" in readme
@@ -112,10 +127,33 @@ def main() -> int:
     assert "enum class TemperatureSource" in source
     assert "case TemperatureSource::SharedMemory:" in source
     assert "case TemperatureSource::GadgetRegistry:" in source
+    assert "case TemperatureSource::WindowsThermalZones:" in source
     assert "case TemperatureSource::Disabled:" in source
     assert "NormalizeRegistryTemperature" in source
+    assert '\\\\Thermal Zone Information(*)\\\\Temperature' in source
+    assert "ReadWindowsThermalZones" in source
+    assert "TemperatureProvider::WindowsThermalZones" in source
     assert "static_assert(offsetof(HwInfoHeader, pollTime) == 12);" in source
     assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
+
+    temperature_dispatch = source[
+        source.index("void ReadTemperatures(") : source.index("uint64_t FileTimeValue(")
+    ]
+    assert "case TemperatureSource::HwInfoAuto:" in temperature_dispatch
+    assert "ReadHwInfoTemperatures(snapshot, settings);" in temperature_dispatch
+    assert "if (!snapshot.cpuTemp)" in temperature_dispatch
+    assert "ReadWindowsThermalZones(snapshot, settings);" in temperature_dispatch
+
+    windows_thermal_reader_start = source.index(
+        "void ReadWindowsThermalZones(", source.index("bool ReadPdhArray(")
+    )
+    windows_thermal_reader = source[
+        windows_thermal_reader_start : source.index("double ReadGpuUsage(")
+    ]
+    assert "PDH_CSTATUS_VALID_DATA" in windows_thermal_reader
+    assert "kelvin < 200.0 || kelvin > 473.15" in windows_thermal_reader
+    assert "ThermalZoneAggregation::Hottest" in windows_thermal_reader
+    assert "aggregate /= validCount" in windows_thermal_reader
 
     loaded_hook = source[
         source.index("void* WINAPI TaskbarFrame_Constructor_Hook") :
