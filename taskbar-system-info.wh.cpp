@@ -10,7 +10,7 @@
 // @homepage        https://github.com/starychenko/windhawk-taskbar-system-info
 // @license         GPL-3.0
 // @include         explorer.exe
-// @architecture    amd64
+// @architecture    x86-64
 // @compilerOptions -lole32 -loleaut32 -lruntimeobject -lpdh -ldxgi -lversion -DWIN32_LEAN_AND_MEAN
 // ==/WindhawkMod==
 
@@ -2015,7 +2015,7 @@ bool HookTaskbarDllSymbols() {
         return false;
     }
 
-    WindhawkUtils::SYMBOL_HOOK hooks[] = {
+    WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {
         {{LR"(const CTaskBand::`vftable'{for `ITaskListWndSite'})"},
          &CTaskBand_ITaskListWndSite_vftable},
         {{LR"(public: virtual class std::shared_ptr<class TaskbarHost> __cdecl CTaskBand::GetTaskbarHost(void)const )"},
@@ -2025,10 +2025,12 @@ bool HookTaskbarDllSymbols() {
         {{LR"(public: void __cdecl std::_Ref_count_base::_Decref(void))"},
          &RefCountBase_Decref_Original},
     };
-    return WindhawkUtils::HookSymbols(module, hooks, std::size(hooks));
+    return WindhawkUtils::HookSymbols(module, taskbarDllHooks,
+                                      std::size(taskbarDllHooks));
 }
 
 bool HookTaskbarViewSymbols(HMODULE module) {
+    // Taskbar.View.dll, ExplorerExtensions.dll
     WindhawkUtils::SYMBOL_HOOK hooks[] = {{
         {LR"(public: __cdecl winrt::Taskbar::implementation::TaskbarFrame::TaskbarFrame(void))"},
         &TaskbarFrame_Constructor_Original,

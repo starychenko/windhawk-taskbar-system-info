@@ -47,7 +47,7 @@ def main() -> int:
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
-        "architecture": "amd64",
+        "architecture": "x86-64",
     }
     for key, value in expected.items():
         assert metadata.get(key) == value, f"Unexpected @{key}: {metadata.get(key)!r}"
