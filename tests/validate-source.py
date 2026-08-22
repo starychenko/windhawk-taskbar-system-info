@@ -92,6 +92,8 @@ def main() -> int:
     assert "HWiNFO_SENS_SM2" in source
     assert "ReadHwInfoSharedMemory" in source
     assert "Software\\\\HWiNFO64\\\\VSB" in source
+    assert "static_assert(offsetof(HwInfoHeader, pollTime) == 12);" in source
+    assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
 
     loaded_hook = source[
         source.index("void* WINAPI TaskbarFrame_Constructor_Hook") :
@@ -101,6 +103,12 @@ def main() -> int:
     assert "InjectWidget(sender" not in loaded_hook
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
+    taskbar_symbols_check = mod_init[
+        mod_init.index("if (!HookTaskbarDllSymbols())") :
+        mod_init.index("if (HMODULE module = GetTaskbarViewModule())")
+    ]
+    assert "return FALSE;" in taskbar_symbols_check
+
     assert "EnsurePdhQuery();" not in mod_init, "PDH must be initialized lazily"
     update_widget = source[
         source.index("void UpdateWidgetText()") : source.index("void EnsureTimer()")
