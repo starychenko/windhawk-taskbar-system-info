@@ -85,6 +85,20 @@ def main() -> int:
     assert "std::optional<std::list<FrameworkElement::Loaded_revoker>>" in source
     assert "#elif defined(_M_ARM64)" in source
     assert "0xD503237F" in source
+    assert "SendMessageTimeoutW(" not in source
+    assert "SendMessageW(window, message" in source
+    assert "size_t elementOffset = 0;" in source
+    assert 'Wh_Log(L"Removing stale Taskbar System Info widget")' in source
+    assert "HWiNFO_SENS_SM2" in source
+    assert "ReadHwInfoSharedMemory" in source
+    assert "Software\\\\HWiNFO64\\\\VSB" in source
+
+    loaded_hook = source[
+        source.index("void* WINAPI TaskbarFrame_Constructor_Hook") :
+        source.index("bool HookTaskbarDllSymbols()")
+    ]
+    assert "ApplyToCurrentTaskbar(nullptr);" in loaded_hook
+    assert "InjectWidget(sender" not in loaded_hook
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     assert "EnsurePdhQuery();" not in mod_init, "PDH must be initialized lazily"

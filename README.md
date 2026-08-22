@@ -49,17 +49,21 @@ this order:
 1. Shared memory `Global\HWiNFO_SENS_SM2`.
 2. Gadget registry `HKCU\Software\HWiNFO64\VSB`.
 
-If neither interface is available, temperatures are shown as `--°C`; CPU, GPU,
-RAM, and VRAM monitoring continues to work. Shared-memory availability is
-governed by the installed HWiNFO edition.
+Shared-memory integration targets HWiNFO 7.0 or newer, which permits full
+disclosure of the interface. The free HWiNFO64 edition disables shared memory
+after 12 hours of continuous use; HWiNFO64 Pro has no such limit.
 
-For the Gadget fallback, report suitable readings to Gadget in the HWiNFO
-Sensors window. The automatic sensor matcher prefers:
+For the Gadget fallback, enable **Report to Gadget** under
+**Sensor Settings > HWiNFO Gadget**. HWiNFO and Explorer must run under the
+same Windows user. The automatic sensor matcher prefers:
 
 - CPU: `CPU (Tctl/Tdie)`, `CPU Die (average)`, or `CPU Package`.
 - GPU: `GPU Temperature`.
 
 Partial sensor-name filters are available in the mod settings.
+
+If neither source is available, temperatures are shown as `--°C`; CPU, GPU,
+RAM, and VRAM monitoring continues to work.
 
 ## Default alerts
 
