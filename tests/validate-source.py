@@ -155,9 +155,18 @@ def main() -> int:
     assert "AddPdhCounter(" in source
     assert "g_nextPdhCounterRetry" in source
     assert "TearDownTaskbarUi" in source
+    assert "FindAnyWindowOnTaskbarThread" in source
     assert 'Wh_Log(L"Initial taskbar UI teardown failed; will retry")' in source
     assert 'Wh_Log(L"Taskbar UI teardown retry failed")' in source
     assert 'GetModuleHandleW(L"gdi32.dll")' in source
+
+    shared_memory_reader = source[
+        source.index("bool ReadHwInfoSharedMemory(") :
+        source.index("std::optional<std::wstring> ReadRegistryString(")
+    ]
+    assert "HwInfoHeader header{};" in shared_memory_reader
+    assert "std::memcpy(&header, view, sizeof(header));" in shared_memory_reader
+    assert "header->" not in shared_memory_reader
 
     windows_thermal_reader_start = source.index(
         "void ReadWindowsThermalZones(", source.index("bool ReadPdhArray(")
