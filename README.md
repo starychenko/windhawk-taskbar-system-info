@@ -33,6 +33,7 @@ fixed-width values.
 - Dedicated VRAM usage from `GPU Adapter Memory(*)\Dedicated Usage`.
 - Dedicated VRAM capacity and adapter identity from DXGI.
 - CPU and GPU temperatures from HWiNFO when available.
+- GPU fallback from the Windows display-driver interface (D3DKMT).
 - CPU fallback from Windows ACPI thermal zones exposed through PDH.
 
 Metric collection runs on a worker thread. The taskbar UI thread only renders
@@ -47,15 +48,16 @@ matched to the selected DXGI adapter by LUID.
 The **Temperature source** setting provides these modes:
 
 - **Automatic** fills CPU and GPU independently: HWiNFO Shared Memory first,
-  then HWiNFO Gadget Registry, then Windows thermal zones for a still-missing
-  CPU reading.
+  then HWiNFO Gadget Registry, then Windows D3DKMT for a still-missing GPU
+  reading and Windows thermal zones for a still-missing CPU reading.
 - **HWiNFO automatic** uses only the two HWiNFO interfaces.
 - **HWiNFO Shared Memory** uses only `Global\HWiNFO_SENS_SM2`.
 - **HWiNFO Gadget Registry** uses only
   `HKCU\Software\HWiNFO64\VSB`.
-- **Windows thermal zones** reads the Windows
-  `\Thermal Zone Information(*)\Temperature` PDH counter, matching Taskbar Clock
-  Customization. It needs no third-party monitor, but supplies CPU only.
+- **Windows native** reads GPU temperature from the selected display driver via
+  D3DKMT and CPU temperature from the Windows
+  `\Thermal Zone Information(*)\Temperature` PDH counter. It needs no
+  third-party monitor.
 - **Disabled** skips temperature collection while keeping every other metric.
 
 Windows thermal zones are ACPI platform zones. Depending on the firmware they
@@ -132,13 +134,15 @@ python .\tests\validate-source.py
 ```
 
 The local build uses the compiler bundled with Windhawk. The smoke-test queries
-live DXGI and PDH state, verifies that both sources select the same GPU, checks
-GPU and VRAM ranges, and reports whether Windows exposes usable thermal zones.
+live DXGI, D3DKMT and PDH state, verifies that all GPU sources select the same
+adapter, checks GPU, VRAM and temperature ranges, and reports whether Windows
+exposes usable ACPI thermal zones.
 
 ## Credits and license
 
 Taskbar discovery and window-thread marshaling follow techniques from
 [Multirow taskbar for Windows 11](https://github.com/ramensoftware/windhawk-mods/blob/main/mods/taskbar-multirow.wh.cpp)
-by Michael Maltsev (`m417z`).
+by Michael Maltsev (`m417z`). Native GPU temperature collection follows his
+[Taskbar Clock Customization implementation](https://github.com/m417z/my-windhawk-mods/commit/861920df6380f4c13abec5d9226362c4725e8362).
 
 Released under GPL-3.0.

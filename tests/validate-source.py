@@ -43,7 +43,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -86,7 +86,7 @@ def main() -> int:
         "hwinfoAuto",
         "sharedMemory",
         "gadgetRegistry",
-        "windowsThermalZones",
+        "windowsNative",
         "disabled",
     }
     for options_key in ("$options", "$options:uk-UA"):
@@ -127,12 +127,18 @@ def main() -> int:
     assert "enum class TemperatureSource" in source
     assert "case TemperatureSource::SharedMemory:" in source
     assert "case TemperatureSource::GadgetRegistry:" in source
-    assert "case TemperatureSource::WindowsThermalZones:" in source
+    assert "case TemperatureSource::WindowsNative:" in source
     assert "case TemperatureSource::Disabled:" in source
     assert "NormalizeRegistryTemperature" in source
     assert '\\\\Thermal Zone Information(*)\\\\Temperature' in source
     assert "ReadWindowsThermalZones" in source
     assert "TemperatureProvider::WindowsThermalZones" in source
+    assert "TemperatureProvider::WindowsD3dkmt" in source
+    assert "D3DKMT_ADAPTER_PERFDATA" in source
+    assert "D3DKMTQueryAdapterInfo" in source
+    assert "kAdapterPerfDataQueryType = 62" in source
+    assert "ReadWindowsGpuTemperature" in source
+    assert 'value == L"windowsThermalZones"' in source
     assert "static_assert(offsetof(HwInfoHeader, pollTime) == 12);" in source
     assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
 
@@ -141,6 +147,8 @@ def main() -> int:
     ]
     assert "case TemperatureSource::HwInfoAuto:" in temperature_dispatch
     assert "ReadHwInfoTemperatures(snapshot, settings);" in temperature_dispatch
+    assert "if (!snapshot.gpuTemp)" in temperature_dispatch
+    assert "ReadWindowsGpuTemperature(snapshot, settings);" in temperature_dispatch
     assert "if (!snapshot.cpuTemp)" in temperature_dispatch
     assert "ReadWindowsThermalZones(snapshot, settings);" in temperature_dispatch
 

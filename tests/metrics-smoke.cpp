@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cwctype>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -15,6 +16,89 @@
 namespace {
 
 constexpr double kGiB = 1024.0 * 1024.0 * 1024.0;
+
+using D3DKMT_HANDLE = UINT32;
+
+struct D3DKMT_OPENADAPTERFROMLUID {
+    LUID AdapterLuid;
+    D3DKMT_HANDLE hAdapter;
+};
+
+struct D3DKMT_CLOSEADAPTER {
+    D3DKMT_HANDLE hAdapter;
+};
+
+struct D3DKMT_QUERYADAPTERINFO {
+    D3DKMT_HANDLE hAdapter;
+    UINT Type;
+    void* pPrivateDriverData;
+    UINT PrivateDriverDataSize;
+};
+
+struct D3DKMT_ADAPTER_PERFDATA {
+    UINT PhysicalAdapterIndex;
+    ULONGLONG MemoryFrequency;
+    ULONGLONG MaxMemoryFrequency;
+    ULONGLONG MaxMemoryFrequencyOC;
+    ULONGLONG MemoryBandwidth;
+    ULONGLONG PCIEBandwidth;
+    ULONG FanRPM;
+    ULONG Power;
+    ULONG Temperature;
+    UCHAR PowerStateOverride;
+};
+
+using D3DKMTOpenAdapterFromLuid_t =
+    LONG(WINAPI*)(D3DKMT_OPENADAPTERFROMLUID*);
+using D3DKMTQueryAdapterInfo_t =
+    LONG(WINAPI*)(D3DKMT_QUERYADAPTERINFO*);
+using D3DKMTCloseAdapter_t =
+    LONG(WINAPI*)(const D3DKMT_CLOSEADAPTER*);
+
+std::optional<double> ReadGpuTemperature(const LUID& luid) {
+    HMODULE gdi32 = LoadLibraryExW(L"gdi32.dll", nullptr,
+                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!gdi32) {
+        return std::nullopt;
+    }
+
+    auto openAdapter = reinterpret_cast<D3DKMTOpenAdapterFromLuid_t>(
+        GetProcAddress(gdi32, "D3DKMTOpenAdapterFromLuid"));
+    auto queryAdapter = reinterpret_cast<D3DKMTQueryAdapterInfo_t>(
+        GetProcAddress(gdi32, "D3DKMTQueryAdapterInfo"));
+    auto closeAdapter = reinterpret_cast<D3DKMTCloseAdapter_t>(
+        GetProcAddress(gdi32, "D3DKMTCloseAdapter"));
+    if (!openAdapter || !queryAdapter || !closeAdapter) {
+        FreeLibrary(gdi32);
+        return std::nullopt;
+    }
+
+    D3DKMT_OPENADAPTERFROMLUID openInfo{};
+    openInfo.AdapterLuid = luid;
+    if (openAdapter(&openInfo) != 0) {
+        FreeLibrary(gdi32);
+        return std::nullopt;
+    }
+
+    D3DKMT_ADAPTER_PERFDATA perfData{};
+    D3DKMT_QUERYADAPTERINFO queryInfo{};
+    queryInfo.hAdapter = openInfo.hAdapter;
+    queryInfo.Type = 62;  // KMTQAITYPE_ADAPTERPERFDATA
+    queryInfo.pPrivateDriverData = &perfData;
+    queryInfo.PrivateDriverDataSize = sizeof(perfData);
+    LONG status = queryAdapter(&queryInfo);
+
+    D3DKMT_CLOSEADAPTER closeInfo{};
+    closeInfo.hAdapter = openInfo.hAdapter;
+    closeAdapter(&closeInfo);
+    FreeLibrary(gdi32);
+
+    if (status != 0 || perfData.Temperature == 0 ||
+        perfData.Temperature > 2000) {
+        return std::nullopt;
+    }
+    return perfData.Temperature / 10.0;
+}
 
 std::wstring ToLower(std::wstring value) {
     std::transform(value.begin(), value.end(), value.begin(), [](wchar_t ch) {
@@ -189,12 +273,18 @@ int wmain() {
     double totalGb = static_cast<double>(selected.DedicatedVideoMemory) / kGiB;
     double usedGb = vramBytes / kGiB;
     double percent = totalGb > 0.0 ? usedGb / totalGb * 100.0 : 0.0;
+    auto gpuTemperature = ReadGpuTemperature(selected.AdapterLuid);
 
     std::wcout << L"GPU=" << selected.Description << L"\n"
                << L"LUID=" << luid << L"\n"
                << L"GPU_USAGE=" << gpuUsage << L"%\n"
                << L"VRAM=" << usedGb << L"/" << totalGb << L" GiB ("
                << percent << L"%)\n";
+    if (gpuTemperature) {
+        std::wcout << L"GPU_TEMP_D3DKMT=" << *gpuTemperature << L" C\n";
+    } else {
+        std::wcout << L"GPU_TEMP_D3DKMT=unavailable\n";
+    }
     if (thermalCount) {
         std::wcout << L"WINDOWS_THERMAL_ZONES=" << thermalCount
                    << L" average=" << thermalSumCelsius / thermalCount
@@ -207,7 +297,8 @@ int wmain() {
     }
 
     if (!vramFound || gpuUsage < 0.0 || gpuUsage > 100.0 || usedGb < 0.0 ||
-        usedGb > totalGb * 1.25) {
+        usedGb > totalGb * 1.25 ||
+        (gpuTemperature && (*gpuTemperature < 0.0 || *gpuTemperature > 200.0))) {
         std::wcerr << L"Metric validation failed\n";
         return 5;
     }
