@@ -151,6 +151,13 @@ def main() -> int:
     assert "ReadWindowsGpuTemperature(snapshot, settings);" in temperature_dispatch
     assert "if (!snapshot.cpuTemp)" in temperature_dispatch
     assert "ReadWindowsThermalZones(snapshot, settings);" in temperature_dispatch
+    assert "kPdhCounterRetryInterval" in source
+    assert "AddPdhCounter(" in source
+    assert "g_nextPdhCounterRetry" in source
+    assert "TearDownTaskbarUi" in source
+    assert 'Wh_Log(L"Initial taskbar UI teardown failed; will retry")' in source
+    assert 'Wh_Log(L"Taskbar UI teardown retry failed")' in source
+    assert 'GetModuleHandleW(L"gdi32.dll")' in source
 
     windows_thermal_reader_start = source.index(
         "void ReadWindowsThermalZones(", source.index("bool ReadPdhArray(")
