@@ -43,7 +43,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.3.0",
+        "version": "1.3.1",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -152,6 +152,9 @@ def main() -> int:
     assert "if (!snapshot.cpuTemp)" in temperature_dispatch
     assert "ReadWindowsThermalZones(snapshot, settings);" in temperature_dispatch
     assert "kPdhCounterRetryInterval" in source
+    assert "kPdhReadFailureThreshold" in source
+    assert "RecordPdhReadFailure" in source
+    assert "InvalidateDxgiAdapterCache" in source
     assert "AddPdhCounter(" in source
     assert "g_nextPdhCounterRetry" in source
     assert "TearDownTaskbarUi" in source
@@ -160,6 +163,13 @@ def main() -> int:
     assert 'Wh_Log(L"Taskbar UI teardown retry failed")' in source
     assert 'GetModuleHandleW(L"gdi32.dll")' in source
 
+    format_capacity = source[
+        source.index("std::wstring FormatCapacity(") :
+        source.index("enum class AlertLevel")
+    ]
+    assert "totalGb < 1.0 ? 1 : 0" in format_capacity
+    assert "FormatFixed(totalGb, totalDecimals)" in format_capacity
+
     shared_memory_reader = source[
         source.index("bool ReadHwInfoSharedMemory(") :
         source.index("std::optional<std::wstring> ReadRegistryString(")
@@ -167,12 +177,35 @@ def main() -> int:
     assert "HwInfoHeader header{};" in shared_memory_reader
     assert "std::memcpy(&header, view, sizeof(header));" in shared_memory_reader
     assert "header->" not in shared_memory_reader
+    assert "FixedAnsiToWide(reading.unit" in shared_memory_reader
+    assert "NormalizeTemperature(" in shared_memory_reader
+    assert "snapshot.cpuTemp = *value;" in shared_memory_reader
+    assert "snapshot.gpuTemp = *value;" in shared_memory_reader
+
+    normalize_temperature = source[
+        source.index("std::optional<double> NormalizeTemperature(") :
+        source.index("bool ReadHwInfoSharedMemory(")
+    ]
+    assert (
+        "fahrenheit ? (value - 32.0) * 5.0 / 9.0 : value"
+        in normalize_temperature
+    )
+    assert 'unit == L"c"' in normalize_temperature
+    assert 'unit == L"f"' in normalize_temperature
+    assert "celsiusValue < -50.0" in normalize_temperature
+
+    assert "g_sharedVramCounter" in source
+    assert 'L"\\\\GPU Adapter Memory(*)\\\\Shared Usage"' in source
+    assert "adapter->sharedSystemMemory" in source
+    assert "vramTotalBytes" in source
 
     windows_thermal_reader_start = source.index(
         "void ReadWindowsThermalZones(", source.index("bool ReadPdhArray(")
     )
     windows_thermal_reader = source[
-        windows_thermal_reader_start : source.index("double ReadGpuUsage(")
+        windows_thermal_reader_start : source.index(
+            "std::optional<double> ReadGpuUsage("
+        )
     ]
     assert "PDH_CSTATUS_VALID_DATA" in windows_thermal_reader
     assert "kelvin < 200.0 || kelvin > 473.15" in windows_thermal_reader

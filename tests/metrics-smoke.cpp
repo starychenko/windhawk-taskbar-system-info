@@ -153,8 +153,9 @@ int wmain() {
         }
     }
     factory->Release();
-    if (!found || !selected.DedicatedVideoMemory) {
-        std::wcerr << L"No dedicated GPU found\n";
+    if (!found ||
+        (!selected.DedicatedVideoMemory && !selected.SharedSystemMemory)) {
+        std::wcerr << L"No GPU memory capacity found\n";
         return 2;
     }
 
@@ -166,6 +167,7 @@ int wmain() {
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER gpuCounter = nullptr;
     PDH_HCOUNTER vramCounter = nullptr;
+    PDH_HCOUNTER sharedVramCounter = nullptr;
     PDH_HCOUNTER thermalCounter = nullptr;
     if (PdhOpenQueryW(nullptr, 0, &query) != ERROR_SUCCESS ||
         PdhAddEnglishCounterW(query,
@@ -173,7 +175,10 @@ int wmain() {
                               &gpuCounter) != ERROR_SUCCESS ||
         PdhAddEnglishCounterW(query,
                               L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0,
-                              &vramCounter) != ERROR_SUCCESS) {
+                              &vramCounter) != ERROR_SUCCESS ||
+        PdhAddEnglishCounterW(query,
+                              L"\\GPU Adapter Memory(*)\\Shared Usage", 0,
+                              &sharedVramCounter) != ERROR_SUCCESS) {
         std::wcerr << L"PDH setup failed\n";
         if (query) {
             PdhCloseQuery(query);
@@ -227,7 +232,10 @@ int wmain() {
     count = 0;
     double vramBytes = 0.0;
     bool vramFound = false;
-    if (ReadArray(vramCounter, buffer, count)) {
+    bool useDedicatedMemory = selected.DedicatedVideoMemory > 0;
+    PDH_HCOUNTER selectedMemoryCounter =
+        useDedicatedMemory ? vramCounter : sharedVramCounter;
+    if (ReadArray(selectedMemoryCounter, buffer, count)) {
         auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
             buffer.data());
         for (DWORD i = 0; i < count; i++) {
@@ -270,7 +278,10 @@ int wmain() {
     }
     PdhCloseQuery(query);
 
-    double totalGb = static_cast<double>(selected.DedicatedVideoMemory) / kGiB;
+    uint64_t totalBytes = useDedicatedMemory
+                              ? selected.DedicatedVideoMemory
+                              : selected.SharedSystemMemory;
+    double totalGb = static_cast<double>(totalBytes) / kGiB;
     double usedGb = vramBytes / kGiB;
     double percent = totalGb > 0.0 ? usedGb / totalGb * 100.0 : 0.0;
     auto gpuTemperature = ReadGpuTemperature(selected.AdapterLuid);
@@ -278,7 +289,8 @@ int wmain() {
     std::wcout << L"GPU=" << selected.Description << L"\n"
                << L"LUID=" << luid << L"\n"
                << L"GPU_USAGE=" << gpuUsage << L"%\n"
-               << L"VRAM=" << usedGb << L"/" << totalGb << L" GiB ("
+               << L"GPU_MEMORY=" << usedGb << L"/" << totalGb << L" GiB ("
+               << (useDedicatedMemory ? L"dedicated, " : L"shared, ")
                << percent << L"%)\n";
     if (gpuTemperature) {
         std::wcout << L"GPU_TEMP_D3DKMT=" << *gpuTemperature << L" C\n";
