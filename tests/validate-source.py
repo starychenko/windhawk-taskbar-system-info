@@ -43,7 +43,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.3.2",
+        "version": "1.3.3",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -156,13 +156,15 @@ def main() -> int:
     assert "RecordPdhReadFailure" in source
     assert "IsHardPdhArrayFailure" in source
     assert "PDH_CSTATUS_NO_INSTANCE" in source
-    assert "g_pdhGpuSampleWasAvailable = false;" in source
-    assert "g_pdhVramSampleWasAvailable = false;" in source
+    assert "g_pdhGpuSampleWasAvailable" not in source
+    assert "g_pdhVramSampleWasAvailable" not in source
     assert "InvalidateGpuAdapterCache" in source
     assert "D3DKMTEnumAdapters2" in source
     assert "D3DKMT_ADAPTERREGISTRYINFO" in source
     assert "D3DKMT_SEGMENTSIZEINFO" in source
     assert "GetLiveD3dkmtAdapterInfo" in source
+    assert "ResolveCurrentGpuAdapterInfo" in source
+    assert "HasGpuAdapterIdentityChanged" in source
     assert "!candidate.description.empty()" in source
     assert "AddPdhCounter(" in source
     assert "g_nextPdhCounterRetry" in source
@@ -180,20 +182,23 @@ def main() -> int:
     assert "FormatFixed(totalGb, totalDecimals)" in format_capacity
 
     shared_memory_reader = source[
-        source.index("bool ReadHwInfoSharedMemory(") :
+        source.index("void ReadHwInfoSharedMemory(") :
         source.index("std::optional<std::wstring> ReadRegistryString(")
     ]
     assert "HwInfoHeader header{};" in shared_memory_reader
     assert "std::memcpy(&header, view, sizeof(header));" in shared_memory_reader
     assert "header->" not in shared_memory_reader
-    assert "FixedAnsiToWide(reading.unit" in shared_memory_reader
-    assert "NormalizeTemperature(" in shared_memory_reader
+    assert "mappedSize >= sizeof(HwInfoHeader)" in shared_memory_reader
+    assert "FixedAnsiToWide(reading.unit" not in shared_memory_reader
+    assert "NormalizeHwInfoTemperature(" in shared_memory_reader
     assert "snapshot.cpuTemp = *value;" in shared_memory_reader
     assert "snapshot.gpuTemp = *value;" in shared_memory_reader
+    assert "void ReadHwInfoGadgetRegistry(" in source
+    assert "bool foundAny" not in source
 
     normalize_temperature = source[
         source.index("std::optional<double> NormalizeTemperature(") :
-        source.index("bool ReadHwInfoSharedMemory(")
+        source.index("constexpr char HwInfoTemperatureUnit(")
     ]
     assert (
         "fahrenheit ? (value - 32.0) * 5.0 / 9.0 : value"
@@ -203,6 +208,17 @@ def main() -> int:
     assert 'unit == L"f"' in normalize_temperature
     assert "celsiusValue < -50.0" in normalize_temperature
 
+    hwinfo_unit_reader = source[
+        source.index("constexpr char HwInfoTemperatureUnit(") :
+        source.index("void ReadHwInfoSharedMemory(")
+    ]
+    assert "MultiByteToWideChar" not in hwinfo_unit_reader
+    assert "unit[i] == 'C' || unit[i] == 'c'" in hwinfo_unit_reader
+    assert "unit[i] == 'F' || unit[i] == 'f'" in hwinfo_unit_reader
+    assert "kHwInfoRawCelsiusUnit" in hwinfo_unit_reader
+    assert "kHwInfoRawFahrenheitUnit" in hwinfo_unit_reader
+    assert "static_assert(HwInfoTemperatureUnit" in hwinfo_unit_reader
+
     assert "g_sharedVramCounter" in source
     assert 'L"\\\\GPU Adapter Memory(*)\\\\Shared Usage"' in source
     assert "adapter->sharedSystemMemory" in source
@@ -210,11 +226,15 @@ def main() -> int:
     assert "bool gpuAvailable = false;" in source
     assert "g_gpuUsageText.Text(snapshot.gpuAvailable" in source
     assert 'L"--%"' in source
-    assert "g_gpuHistory.clear();" in source
-    assert 'RecordPdhReadFailure(L"adapter mismatch")' in source
+    assert "RecoverFromGpuAdapterIdentityChange" in source
+    assert 'RecreatePdhSources(L"confirmed adapter LUID change"' in source
     assert 'RecordPdhReadFailure(L"counter read")' in source
     assert "adapter && vramReadStatus == ERROR_SUCCESS" in source
+    assert "HasGpuAdapterIdentityChanged(*adapter" in source
+    assert "g_nextGpuIdentityCheck = now + std::chrono::seconds(5)" in source
     assert "g_pdhGpuSampleWasAvailable && !gpuUsage" not in source
+    assert "NeedsWindowsThermalZones" in source
+    assert "PdhRemoveCounter(g_thermalZoneCounter)" in source
 
     windows_thermal_reader_start = source.index(
         "void ReadWindowsThermalZones(",
@@ -249,6 +269,19 @@ def main() -> int:
         source.index("void UpdateWidgetText()") : source.index("void EnsureTimer()")
     ]
     assert "CollectMetrics(" not in update_widget, "Metrics must stay off the UI thread"
+    assert "g_gpuHistory.clear();" not in update_widget
+
+    inject_widget = source[
+        source.index("bool InjectWidget(") : source.index("using RunFromWindowThreadProc")
+    ]
+    reuse_path = inject_widget[
+        inject_widget.index("if (g_widget &&") :
+        inject_widget.index('Wh_Log(L"Removing stale Taskbar System Info widget")')
+    ]
+    assert "StartMetricsWorker()" in reuse_path
+    assert "EnsureTimer();" in reuse_path
+
+    assert "code[3] == 0x28" not in source
 
     print(
         "Source validation OK: "

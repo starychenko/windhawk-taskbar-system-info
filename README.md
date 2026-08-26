@@ -41,7 +41,8 @@ fixed-width values.
 Metric collection runs on a worker thread. The taskbar UI thread only renders
 the latest completed snapshot. If a display-driver restart changes an adapter
 LUID or invalidates the active performance counters, the mod refreshes the live
-adapter list and rebuilds the counters automatically.
+adapter list and rebuilds the counters automatically. A missing VRAM instance
+alone does not trigger recovery unless fresh enumeration confirms a LUID change.
 
 The adapter with the most dedicated VRAM is selected automatically. A partial
 adapter-name filter is available for multi-GPU systems. GPU usage and VRAM are
@@ -77,7 +78,9 @@ HWiNFO is optional and is not bundled with this mod.
 
 Shared-memory integration targets HWiNFO 7.0 or newer, which permits full
 disclosure of the interface. The free HWiNFO64 edition disables shared memory
-after 12 hours of continuous use; HWiNFO64 Pro has no such limit.
+after 12 hours of continuous use; HWiNFO64 Pro has no such limit. Temperature
+units are classified from HWiNFO's raw unit bytes, independently of the Windows
+ANSI code page.
 
 Gadget Registry is a separate HWiNFO interface. Enable **Report to Gadget**
 under **Sensor Settings > HWiNFO Gadget**. HWiNFO and Explorer must run under
