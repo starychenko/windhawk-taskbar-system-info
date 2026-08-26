@@ -31,19 +31,22 @@ fixed-width values.
 - RAM usage and capacity from `GlobalMemoryStatusEx`.
 - GPU utilization from Windows PDH GPU engine counters.
 - Dedicated or shared GPU-memory usage from Windows PDH counters.
-- GPU-memory capacity and adapter identity from DXGI. Shared system memory is
-  used when an integrated adapter reports no dedicated video memory.
+- GPU-memory capacity and adapter identity from live D3DKMT enumeration, with
+  DXGI as a compatibility fallback. Shared system memory is used when an
+  integrated adapter reports no dedicated video memory.
 - CPU and GPU temperatures from HWiNFO when available.
 - GPU fallback from the Windows display-driver interface (D3DKMT).
 - CPU fallback from Windows ACPI thermal zones exposed through PDH.
 
 Metric collection runs on a worker thread. The taskbar UI thread only renders
-the latest completed snapshot. If a display-driver restart invalidates the
-active GPU performance counters, the mod rebuilds them automatically.
+the latest completed snapshot. If a display-driver restart changes an adapter
+LUID or invalidates the active performance counters, the mod refreshes the live
+adapter list and rebuilds the counters automatically.
 
 The adapter with the most dedicated VRAM is selected automatically. A partial
 adapter-name filter is available for multi-GPU systems. GPU usage and VRAM are
-matched to the selected DXGI adapter by LUID.
+matched to the selected live adapter by LUID. Duplicate stale adapters without
+a driver name are ignored when a named adapter with the same capacity exists.
 
 ## Temperature providers
 
@@ -136,9 +139,9 @@ python .\tests\validate-source.py
 ```
 
 The local build uses the compiler bundled with Windhawk. The smoke-test queries
-live DXGI, D3DKMT and PDH state, verifies that all GPU sources select the same
-adapter, checks GPU, VRAM and temperature ranges, and reports whether Windows
-exposes usable ACPI thermal zones.
+live D3DKMT, DXGI fallback and PDH state, verifies that the selected GPU LUID is
+present in the performance counters, checks GPU, VRAM and temperature ranges,
+and reports whether Windows exposes usable ACPI thermal zones.
 
 ## Credits and license
 

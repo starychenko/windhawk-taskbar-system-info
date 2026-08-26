@@ -43,7 +43,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.3.1",
+        "version": "1.3.2",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -154,7 +154,16 @@ def main() -> int:
     assert "kPdhCounterRetryInterval" in source
     assert "kPdhReadFailureThreshold" in source
     assert "RecordPdhReadFailure" in source
-    assert "InvalidateDxgiAdapterCache" in source
+    assert "IsHardPdhArrayFailure" in source
+    assert "PDH_CSTATUS_NO_INSTANCE" in source
+    assert "g_pdhGpuSampleWasAvailable = false;" in source
+    assert "g_pdhVramSampleWasAvailable = false;" in source
+    assert "InvalidateGpuAdapterCache" in source
+    assert "D3DKMTEnumAdapters2" in source
+    assert "D3DKMT_ADAPTERREGISTRYINFO" in source
+    assert "D3DKMT_SEGMENTSIZEINFO" in source
+    assert "GetLiveD3dkmtAdapterInfo" in source
+    assert "!candidate.description.empty()" in source
     assert "AddPdhCounter(" in source
     assert "g_nextPdhCounterRetry" in source
     assert "TearDownTaskbarUi" in source
@@ -198,9 +207,18 @@ def main() -> int:
     assert 'L"\\\\GPU Adapter Memory(*)\\\\Shared Usage"' in source
     assert "adapter->sharedSystemMemory" in source
     assert "vramTotalBytes" in source
+    assert "bool gpuAvailable = false;" in source
+    assert "g_gpuUsageText.Text(snapshot.gpuAvailable" in source
+    assert 'L"--%"' in source
+    assert "g_gpuHistory.clear();" in source
+    assert 'RecordPdhReadFailure(L"adapter mismatch")' in source
+    assert 'RecordPdhReadFailure(L"counter read")' in source
+    assert "adapter && vramReadStatus == ERROR_SUCCESS" in source
+    assert "g_pdhGpuSampleWasAvailable && !gpuUsage" not in source
 
     windows_thermal_reader_start = source.index(
-        "void ReadWindowsThermalZones(", source.index("bool ReadPdhArray(")
+        "void ReadWindowsThermalZones(",
+        source.index("PDH_STATUS ReadPdhArray(")
     )
     windows_thermal_reader = source[
         windows_thermal_reader_start : source.index(

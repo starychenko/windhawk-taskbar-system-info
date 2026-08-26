@@ -48,12 +48,124 @@ struct D3DKMT_ADAPTER_PERFDATA {
     UCHAR PowerStateOverride;
 };
 
+struct D3DKMT_ADAPTERINFO {
+    D3DKMT_HANDLE hAdapter;
+    LUID AdapterLuid;
+    ULONG NumOfSources;
+    BOOL bPresentMoveRegionsPreferred;
+};
+
+struct D3DKMT_ENUMADAPTERS2 {
+    ULONG NumAdapters;
+    D3DKMT_ADAPTERINFO* pAdapters;
+};
+
+struct D3DKMT_ADAPTERREGISTRYINFO {
+    WCHAR AdapterString[MAX_PATH];
+    WCHAR BiosString[MAX_PATH];
+    WCHAR DacType[MAX_PATH];
+    WCHAR ChipType[MAX_PATH];
+};
+
+struct D3DKMT_SEGMENTSIZEINFO {
+    ULONGLONG DedicatedVideoMemorySize;
+    ULONGLONG DedicatedSystemMemorySize;
+    ULONGLONG SharedSystemMemorySize;
+};
+
+struct LiveAdapterInfo {
+    std::wstring description;
+    LUID luid{};
+    uint64_t dedicatedVideoMemory = 0;
+    uint64_t sharedSystemMemory = 0;
+};
+
 using D3DKMTOpenAdapterFromLuid_t =
     LONG(WINAPI*)(D3DKMT_OPENADAPTERFROMLUID*);
 using D3DKMTQueryAdapterInfo_t =
     LONG(WINAPI*)(D3DKMT_QUERYADAPTERINFO*);
 using D3DKMTCloseAdapter_t =
     LONG(WINAPI*)(const D3DKMT_CLOSEADAPTER*);
+using D3DKMTEnumAdapters2_t = LONG(WINAPI*)(D3DKMT_ENUMADAPTERS2*);
+
+std::optional<LiveAdapterInfo> ReadLiveAdapter() {
+    HMODULE gdi32 = LoadLibraryExW(L"gdi32.dll", nullptr,
+                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!gdi32) {
+        return std::nullopt;
+    }
+
+    auto enumAdapters = reinterpret_cast<D3DKMTEnumAdapters2_t>(
+        GetProcAddress(gdi32, "D3DKMTEnumAdapters2"));
+    auto queryAdapter = reinterpret_cast<D3DKMTQueryAdapterInfo_t>(
+        GetProcAddress(gdi32, "D3DKMTQueryAdapterInfo"));
+    auto closeAdapter = reinterpret_cast<D3DKMTCloseAdapter_t>(
+        GetProcAddress(gdi32, "D3DKMTCloseAdapter"));
+    if (!enumAdapters || !queryAdapter || !closeAdapter) {
+        FreeLibrary(gdi32);
+        return std::nullopt;
+    }
+
+    D3DKMT_ADAPTERINFO adapters[16]{};
+    D3DKMT_ENUMADAPTERS2 enumeration{std::size(adapters), adapters};
+    if (enumAdapters(&enumeration) != 0) {
+        FreeLibrary(gdi32);
+        return std::nullopt;
+    }
+
+    std::optional<LiveAdapterInfo> selected;
+    ULONG adapterCount =
+        std::min<ULONG>(enumeration.NumAdapters, std::size(adapters));
+    for (ULONG index = 0; index < adapterCount; index++) {
+        D3DKMT_ADAPTERREGISTRYINFO registryInfo{};
+        D3DKMT_QUERYADAPTERINFO registryQuery{
+            adapters[index].hAdapter, 8, &registryInfo, sizeof(registryInfo)};
+        bool registryAvailable = queryAdapter(&registryQuery) == 0;
+
+        D3DKMT_SEGMENTSIZEINFO segmentInfo{};
+        D3DKMT_QUERYADAPTERINFO segmentQuery{
+            adapters[index].hAdapter, 3, &segmentInfo, sizeof(segmentInfo)};
+        bool segmentsAvailable = queryAdapter(&segmentQuery) == 0;
+
+        LiveAdapterInfo candidate{
+            registryAvailable ? registryInfo.AdapterString : L"",
+            adapters[index].AdapterLuid,
+            segmentsAvailable ? segmentInfo.DedicatedVideoMemorySize : 0,
+            segmentsAvailable ? segmentInfo.SharedSystemMemorySize : 0,
+        };
+        std::wcout << L"D3DKMT_CANDIDATE=" << candidate.description
+                   << L" LUID=0x" << std::hex
+                   << static_cast<DWORD>(candidate.luid.HighPart) << L"_0x"
+                   << candidate.luid.LowPart << std::dec << L" dedicated="
+                   << static_cast<double>(candidate.dedicatedVideoMemory) / kGiB
+                   << L" shared="
+                   << static_cast<double>(candidate.sharedSystemMemory) / kGiB
+                   << L"\n";
+        bool betterCandidate =
+            !selected || candidate.dedicatedVideoMemory >
+                             selected->dedicatedVideoMemory ||
+            (candidate.dedicatedVideoMemory ==
+                 selected->dedicatedVideoMemory &&
+             !candidate.description.empty() &&
+             selected->description.empty()) ||
+            (candidate.dedicatedVideoMemory ==
+                 selected->dedicatedVideoMemory &&
+             candidate.description.empty() == selected->description.empty() &&
+             candidate.sharedSystemMemory > selected->sharedSystemMemory);
+        if (betterCandidate) {
+            selected = std::move(candidate);
+        }
+    }
+
+    for (ULONG index = 0; index < adapterCount; index++) {
+        if (adapters[index].hAdapter) {
+            D3DKMT_CLOSEADAPTER closeInfo{adapters[index].hAdapter};
+            closeAdapter(&closeInfo);
+        }
+    }
+    FreeLibrary(gdi32);
+    return selected;
+}
 
 std::optional<double> ReadGpuTemperature(const LUID& luid) {
     HMODULE gdi32 = LoadLibraryExW(L"gdi32.dll", nullptr,
@@ -126,6 +238,12 @@ bool ReadArray(PDH_HCOUNTER counter,
 }  // namespace
 
 int wmain() {
+    auto liveAdapter = ReadLiveAdapter();
+    if (!liveAdapter) {
+        std::wcerr << L"D3DKMT adapter enumeration failed\n";
+        return 1;
+    }
+
     IDXGIFactory* factory = nullptr;
     if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory),
                                  reinterpret_cast<void**>(&factory)))) {
@@ -163,6 +281,20 @@ int wmain() {
     swprintf(luidBuffer, std::size(luidBuffer), L"0x%08X_0x%08X",
              selected.AdapterLuid.HighPart, selected.AdapterLuid.LowPart);
     std::wstring luid = ToLower(luidBuffer);
+
+    wchar_t liveLuidBuffer[32];
+    swprintf(liveLuidBuffer, std::size(liveLuidBuffer),
+             L"0x%08X_0x%08X", liveAdapter->luid.HighPart,
+             liveAdapter->luid.LowPart);
+    std::wstring liveLuid = ToLower(liveLuidBuffer);
+    selected.AdapterLuid = liveAdapter->luid;
+    selected.DedicatedVideoMemory = liveAdapter->dedicatedVideoMemory;
+    selected.SharedSystemMemory = liveAdapter->sharedSystemMemory;
+    if (!liveAdapter->description.empty()) {
+        wcsncpy_s(selected.Description, liveAdapter->description.c_str(),
+                  _TRUNCATE);
+    }
+    luid = liveLuid;
 
     PDH_HQUERY query = nullptr;
     PDH_HCOUNTER gpuCounter = nullptr;
@@ -287,7 +419,7 @@ int wmain() {
     auto gpuTemperature = ReadGpuTemperature(selected.AdapterLuid);
 
     std::wcout << L"GPU=" << selected.Description << L"\n"
-               << L"LUID=" << luid << L"\n"
+               << L"LUID_D3DKMT=" << luid << L"\n"
                << L"GPU_USAGE=" << gpuUsage << L"%\n"
                << L"GPU_MEMORY=" << usedGb << L"/" << totalGb << L" GiB ("
                << (useDedicatedMemory ? L"dedicated, " : L"shared, ")
