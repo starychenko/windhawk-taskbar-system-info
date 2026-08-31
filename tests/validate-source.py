@@ -451,6 +451,7 @@ def main() -> int:
     assert "COLOR_WINDOWTEXT" in source
     assert "COLOR_GRAYTEXT" not in source
     assert "ActualThemeChanged" in source
+    assert "RefreshWidgetTheme" not in source
     assert "WidgetThemeChanged" not in source
     assert "SystemColorsChanged()" in source
     assert "RefreshThemeBrushes(const ModSettings& settings, bool" not in source
