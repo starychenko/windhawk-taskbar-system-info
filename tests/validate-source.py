@@ -384,6 +384,8 @@ def main() -> int:
     assert "InjectWidget(taskbarFrame)" in loaded_apply
     assert "ApplyOnTaskbarThread();" in loaded_apply
     assert "ApplyOnTaskbarThread(taskbarFrame);" in loaded_apply
+    assert "loadedRoot == widgetRoot" in loaded_apply
+    assert "winrt::get_abi(loadedRoot)" not in loaded_apply
 
     assert 'L"Shell_SecondaryTrayWnd"' in source
     assert "CSecondaryTaskBand_ITaskListWndSite_vftable" in source
@@ -395,10 +397,30 @@ def main() -> int:
     assert "ApplyOnTaskbarUiThread" in source
     assert "g_nextPlacementRetry" in source
     assert 'L"Taskbar placement failed; retrying in %u seconds"' in source
-    assert "CoreDispatcherPriority::Low" in source
+    assert "CoreDispatcherPriority::Normal" in source
+    assert "CoreDispatcherPriority::Low" not in source
     assert "g_placementApplyAction = dispatcher.RunAsync(" in source
     assert "ApplyLoadedFrameFallback(context->fallbackFrame" in source
     assert "GetSystemMetrics(SM_CMONITORS)" in source
+    assert "GetDisplayTopologyFingerprint()" in source
+    assert "g_placementIsFallback" in source
+    assert "g_placementLocationUnknown" in source
+    assert "g_hasFailedPlacementTarget" in source
+    assert 'L"Monitor selection is unavailable for the direct-frame fallback"' in source
+    assert "FindAnyWindowOnTaskbarThread(targetWindow)" not in source
+
+    ensure_timer = source[
+        source.index("void EnsureTimer()") : source.index("ColumnDefinition PixelColumn")
+    ]
+    assert "g_taskbarThreadId = GetCurrentThreadId();" in ensure_timer
+    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" in ensure_timer
+
+    placement_wrapper = source[
+        source.index("void ApplyOnTaskbarUiThread(void* contextValue)") :
+        source.index("void ApplyOnTaskbarThread(")
+    ]
+    assert placement_wrapper.count("EnsureTimer();") >= 1
+    assert 'L"Restoring the taskbar placement timer failed: %08X"' in placement_wrapper
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     taskbar_symbols_check = mod_init[
