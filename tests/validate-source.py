@@ -383,6 +383,7 @@ def main() -> int:
     assert "FindOnlyTaskbarWindow()" in loaded_apply
     assert "InjectWidget(taskbarFrame)" in loaded_apply
     assert "ApplyOnTaskbarThread();" in loaded_apply
+    assert "ApplyOnTaskbarThread(taskbarFrame);" in loaded_apply
 
     assert 'L"Shell_SecondaryTrayWnd"' in source
     assert "CSecondaryTaskBand_ITaskListWndSite_vftable" in source
@@ -391,6 +392,13 @@ def main() -> int:
     assert "RemoveWidgetForMoveContext" in source
     assert "EnsureConfiguredTaskbarPlacement" in source
     assert 'Wh_Log(L"Taskbar topology changed; moving the widget")' in source
+    assert "ApplyOnTaskbarUiThread" in source
+    assert "g_nextPlacementRetry" in source
+    assert 'L"Taskbar placement failed; retrying in %u seconds"' in source
+    assert "CoreDispatcherPriority::Low" in source
+    assert "g_placementApplyAction = dispatcher.RunAsync(" in source
+    assert "ApplyLoadedFrameFallback(context->fallbackFrame" in source
+    assert "GetSystemMetrics(SM_CMONITORS)" in source
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     taskbar_symbols_check = mod_init[
@@ -418,7 +426,8 @@ def main() -> int:
     assert "kLightGraphColor" in source
     assert "SPI_GETHIGHCONTRAST" in source
     assert "COLOR_HIGHLIGHT" in source
-    assert "COLOR_GRAYTEXT" in source
+    assert "COLOR_WINDOWTEXT" in source
+    assert "COLOR_GRAYTEXT" not in source
     assert "ActualThemeChanged" in source
     assert "WidgetThemeChanged" not in source
     assert "SystemColorsChanged()" in source
