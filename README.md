@@ -111,7 +111,11 @@ card's temperature.
 
 If the selected source is unavailable, temperatures are shown as `--°C`; CPU,
 GPU, RAM, and VRAM monitoring continues to work. The active CPU and GPU
-providers are logged only when they change.
+providers are logged only when they change. A transient provider timeout keeps
+the last good temperature for at most two samples, avoiding a one-tick `--°C`
+flicker without hiding a provider that has actually disappeared. If automatic
+GPU matching finds temperature readings but none match the selected Windows
+adapter, the log explains that the sensor-name filter is the escape hatch.
 
 ## Default alerts
 
@@ -131,7 +135,8 @@ are not automatically a problem.
   taskbar. x64 is hardware-tested; ARM64 is compilation-tested.
 - Monitor 1 is always the primary display. Other monitors are ordered by their
   position in the virtual desktop and can differ from the numbers in Windows
-  Display Settings. An unavailable selection falls back to the primary taskbar.
+  Display Settings. An unavailable or disconnected selection falls back to the
+  primary taskbar automatically and moves back when the selected display returns.
 - Centered taskbar icons are recommended.
 - Windows Widgets/weather or another left-side taskbar extension can occupy the
   same far-left area. Adjust the offset or disable the conflicting element if

@@ -193,6 +193,9 @@ def main() -> int:
     assert "[[clang::no_destroy]] Grid g_widget{nullptr};" in source
     assert "std::optional<std::thread> g_metricsWorker" in source
     assert "std::shared_ptr<const ModSettings> CurrentSettings()" in source
+    assert (
+        "[[clang::no_destroy]] std::shared_ptr<const ModSettings>" not in source
+    )
     assert "std::optional<std::list<FrameworkElement::Loaded_revoker>>" in source
     assert "#elif defined(_M_ARM64)" in source
     assert "0xD503237F" in source
@@ -226,7 +229,8 @@ def main() -> int:
     ]
     assert "case TemperatureSource::HwInfoAuto:" in temperature_dispatch
     assert "ResolveGpuTemperatureAdapterName(settings)" in temperature_dispatch
-    assert "ReadHwInfoTemperatures(snapshot, settings, gpuAdapterName);" in temperature_dispatch
+    assert "ReadHwInfoTemperatures(snapshot, settings, gpuAdapterName," in temperature_dispatch
+    assert "LogHwInfoGpuTemperatureMismatch" in temperature_dispatch
     assert "if (!snapshot.gpuTemp)" in temperature_dispatch
     assert "ReadWindowsGpuTemperature(snapshot, settings);" in temperature_dispatch
     assert "if (!snapshot.cpuTemp)" in temperature_dispatch
@@ -250,6 +254,10 @@ def main() -> int:
     assert "g_nextPdhCounterRetry" in source
     assert "TearDownTaskbarUi" in source
     assert "FindAnyWindowOnTaskbarThread" in source
+    teardown = source[
+        source.index("bool TearDownTaskbarUi()") : source.index("}  // namespace")
+    ]
+    assert "FindPrimaryTaskbarWindow()" in teardown
     assert 'Wh_Log(L"Initial taskbar UI teardown failed; will retry")' in source
     assert 'Wh_Log(L"Taskbar UI teardown retry failed")' in source
     assert 'GetModuleHandleW(L"gdi32.dll")' in source
@@ -366,14 +374,23 @@ def main() -> int:
         source.index("void* WINAPI TaskbarFrame_Constructor_Hook") :
         source.index("bool HookTaskbarDllSymbols()")
     ]
-    assert "ApplyOnTaskbarThread();" in loaded_hook
-    assert "InjectWidget(sender" not in loaded_hook
+    assert "sender.try_as<FrameworkElement>()" in loaded_hook
+    assert "ApplyLoadedTaskbarFrame(loadedFrame);" in loaded_hook
+    loaded_apply = source[
+        source.index("void ApplyLoadedTaskbarFrame(") :
+        source.index("using TaskbarFrame_Constructor_t")
+    ]
+    assert "FindOnlyTaskbarWindow()" in loaded_apply
+    assert "InjectWidget(taskbarFrame)" in loaded_apply
+    assert "ApplyOnTaskbarThread();" in loaded_apply
 
     assert 'L"Shell_SecondaryTrayWnd"' in source
     assert "CSecondaryTaskBand_ITaskListWndSite_vftable" in source
     assert "CSecondaryTaskBand_GetTaskbarHost_Original" in source
     assert "FindTaskbarWindowForMonitor" in source
     assert "RemoveWidgetForMoveContext" in source
+    assert "EnsureConfiguredTaskbarPlacement" in source
+    assert 'Wh_Log(L"Taskbar topology changed; moving the widget")' in source
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     taskbar_symbols_check = mod_init[
@@ -401,7 +418,11 @@ def main() -> int:
     assert "kLightGraphColor" in source
     assert "SPI_GETHIGHCONTRAST" in source
     assert "COLOR_HIGHLIGHT" in source
-    assert "RefreshThemeBrushes(*settingsSnapshot, true);" in update_widget
+    assert "COLOR_GRAYTEXT" in source
+    assert "ActualThemeChanged" in source
+    assert "WidgetThemeChanged" not in source
+    assert "SystemColorsChanged()" in source
+    assert "RefreshThemeBrushes(const ModSettings& settings, bool" not in source
     assert "g_lastAppliedRepeaterMarginLeft" in source
     assert "margin changed externally" in source
 
@@ -409,9 +430,16 @@ def main() -> int:
         source.index("bool TryHookTaskbarViewSymbols(") :
         source.index("using LoadLibraryExW_t")
     ]
-    assert "kMaximumHookAttempts = 3" in late_hook
+    assert "kMaximumTaskbarViewHookAttempts" in late_hook
     assert "g_taskbarViewDllLoaded = false" in late_hook
     assert "Taskbar.View symbol hook failed" in late_hook
+    load_library_hook_start = source.index("HMODULE WINAPI LoadLibraryExW_Hook")
+    load_library_hook = source[
+        load_library_hook_start :
+        source.index("void CloseMetricSources()", load_library_hook_start)
+    ]
+    assert "if (!g_taskbarViewDllLoaded &&" in load_library_hook
+    assert "g_taskbarViewHookAttempts < kMaximumTaskbarViewHookAttempts" in load_library_hook
 
     metrics_worker = source[
         source.index("void MetricsWorkerProc()") : source.index("bool StartMetricsWorker()")
@@ -423,6 +451,10 @@ def main() -> int:
     assert "break;" not in wait_failed
     assert "std::this_thread::sleep_for" in wait_failed
     assert "else if (waitResult == WAIT_OBJECT_0)" in metrics_worker
+    assert "ApplyTemperatureHoldover(snapshot->cpuTemp" in metrics_worker
+    assert "ApplyTemperatureHoldover(snapshot->gpuTemp" in metrics_worker
+    assert "kTemperatureHoldoverSamples = 2" in source
+    assert "HWiNFO GPU temperature readings found" in source
 
     inject_widget = source[
         source.index("bool InjectWidget(") : source.index("using RunFromWindowThreadProc")
