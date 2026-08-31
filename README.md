@@ -16,6 +16,11 @@ The fixed two-column layout keeps every metric in a predictable place. CPU and
 GPU history uses a fixed 0-100% scale. RAM and VRAM use thin capacity bars.
 Fixed-width fields prevent the layout from shifting as values change. Normal
 values remain monochrome; only warning and critical readings receive color.
+Adaptive colors are enabled by default: normal text follows the native taskbar
+foreground, while graphs and alerts switch automatically between contrasting
+light and dark palettes. Windows high-contrast mode uses its system highlight
+colors instead of the custom palette. Disable the adaptive option to use the
+manual color settings exactly.
 
 Network and disk activity are intentionally not collected.
 
@@ -27,27 +32,37 @@ fixed-width values.
 
 ## Metrics
 
-- CPU utilization from `GetSystemTimes`.
+- CPU utilization from the Windows Processor Utility counter, matching the
+  frequency-aware Task Manager value when available. `GetSystemTimes` remains
+  the compatibility fallback.
 - RAM usage and capacity from `GlobalMemoryStatusEx`.
 - GPU utilization from Windows PDH GPU engine counters.
 - Dedicated or shared GPU-memory usage from Windows PDH counters.
 - GPU-memory capacity and adapter identity from live D3DKMT enumeration, with
-  DXGI as a compatibility fallback. Shared system memory is used when an
-  integrated adapter reports no dedicated video memory.
+  DXGI as a compatibility fallback. Automatic mode uses shared GPU memory for
+  integrated adapters, including the common small dedicated carve-out case,
+  and dedicated VRAM for discrete adapters. The memory type can also be forced
+  in settings for unusual drivers.
 - CPU and GPU temperatures from HWiNFO when available.
 - GPU fallback from the Windows display-driver interface (D3DKMT).
 - CPU fallback from Windows ACPI thermal zones exposed through PDH.
 
 Metric collection runs on a worker thread. The taskbar UI thread only renders
-the latest completed snapshot. If a display-driver restart changes an adapter
-LUID or invalidates the active performance counters, the mod refreshes the live
-adapter list and rebuilds the counters automatically. A missing VRAM instance
-alone does not trigger recovery unless fresh enumeration confirms a LUID change.
+completed snapshots and catches up with every sample that arrived while the UI
+was busy, so the history traces keep their sampling interval. If a display-
+driver restart changes an adapter LUID or invalidates the active performance
+counters, the mod refreshes the live adapter list and rebuilds the counters
+automatically. This identity check also covers a successful but empty VRAM
+counter result and uses exponential backoff while a parked GPU remains idle.
 
 The adapter with the most dedicated VRAM is selected automatically. A partial
 adapter-name filter is available for multi-GPU systems. GPU usage and VRAM are
 matched to the selected live adapter by LUID. Duplicate stale adapters without
 a driver name are ignored when a named adapter with the same capacity exists.
+For an integrated GPU, the displayed capacity is the Windows shared-memory
+limit rather than a physically reserved memory pool, so its percentage has
+different semantics from a discrete GPU's dedicated VRAM. Capacities below
+1 GiB and fractional totals below 4 GiB retain one decimal place.
 
 ## Temperature providers
 
@@ -89,7 +104,10 @@ the same Windows user. The automatic sensor matcher prefers:
 - CPU: `CPU (Tctl/Tdie)`, `CPU Die (average)`, or `CPU Package`.
 - GPU: `GPU Temperature`.
 
-Partial HWiNFO sensor-name filters are available in the mod settings.
+Partial HWiNFO sensor-name filters are available in the mod settings. With
+automatic GPU sensor selection, the HWiNFO sensor name must also match the
+selected Windows adapter, preventing a multi-GPU system from showing another
+card's temperature.
 
 If the selected source is unavailable, temperatures are shown as `--°C`; CPU,
 GPU, RAM, and VRAM monitoring continues to work. The active CPU and GPU
@@ -109,21 +127,30 @@ are not automatically a problem.
 
 ## Compatibility and placement
 
-- Windows 11 64-bit, primary taskbar. x64 is hardware-tested; ARM64 is
-  compilation-tested.
+- Windows 11 64-bit. The widget can be placed on the primary or a secondary
+  taskbar. x64 is hardware-tested; ARM64 is compilation-tested.
+- Monitor 1 is always the primary display. Other monitors are ordered by their
+  position in the virtual desktop and can differ from the numbers in Windows
+  Display Settings. An unavailable selection falls back to the primary taskbar.
 - Centered taskbar icons are recommended.
+- Windows Widgets/weather or another left-side taskbar extension can occupy the
+  same far-left area. Adjust the offset or disable the conflicting element if
+  they overlap.
 - Enable **Reserve space before the Start button** if the widget overlaps
   left-aligned taskbar buttons.
 - The widget is native XAML inside the taskbar, not a topmost overlay or XAML
   Diagnostics consumer.
 - It can coexist with Taskbar Styler.
 
+Secondary-taskbar discovery is adapted from
+[Taskbar Fluent Media Player](https://github.com/Salyts/Taskbar-Fluent-Media-Player)
+by Salyts.
+
 ## Install
 
 ### From the official Windhawk catalog
 
-Once accepted into the catalog, search for **Taskbar System Info** in Windhawk
-and select **Install**.
+Search for **Taskbar System Info** in Windhawk and select **Install**.
 
 ### Manual installation
 
@@ -138,13 +165,17 @@ Run from PowerShell:
 ```powershell
 python .\tests\validate-source.py
 .\build.ps1
+.\build.ps1 -Architecture aarch64 -OutputDirectory .\build-arm64
 .\tests\run-metrics-smoke.ps1
 ```
 
-The local build uses the compiler bundled with Windhawk. The smoke-test queries
-live D3DKMT, DXGI fallback and PDH state, verifies that the selected GPU LUID is
-present in the performance counters, checks GPU, VRAM and temperature ranges,
-and reports whether Windows exposes usable ACPI thermal zones.
+The source validator uses only the Python standard library. The local build uses
+the compiler and architecture-specific engine library bundled with Windhawk.
+The smoke-test queries live D3DKMT, DXGI
+fallback and PDH state, reports integrated-adapter detection, verifies that the
+selected GPU LUID is present in the performance counters, checks GPU, VRAM and
+temperature ranges, and reports whether Windows exposes usable ACPI thermal
+zones.
 
 ## Credits and license
 

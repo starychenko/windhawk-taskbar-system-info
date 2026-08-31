@@ -73,11 +73,18 @@ struct D3DKMT_SEGMENTSIZEINFO {
     ULONGLONG SharedSystemMemorySize;
 };
 
+struct D3DKMT_ADAPTERTYPE {
+    UINT Value;
+};
+
+constexpr UINT kHybridIntegratedAdapterFlag = 1u << 5;
+
 struct LiveAdapterInfo {
     std::wstring description;
     LUID luid{};
     uint64_t dedicatedVideoMemory = 0;
     uint64_t sharedSystemMemory = 0;
+    bool integrated = false;
 };
 
 using D3DKMTOpenAdapterFromLuid_t =
@@ -127,11 +134,18 @@ std::optional<LiveAdapterInfo> ReadLiveAdapter() {
             adapters[index].hAdapter, 3, &segmentInfo, sizeof(segmentInfo)};
         bool segmentsAvailable = queryAdapter(&segmentQuery) == 0;
 
+        D3DKMT_ADAPTERTYPE adapterType{};
+        D3DKMT_QUERYADAPTERINFO adapterTypeQuery{
+            adapters[index].hAdapter, 15, &adapterType, sizeof(adapterType)};
+        bool adapterTypeAvailable = queryAdapter(&adapterTypeQuery) == 0;
+
         LiveAdapterInfo candidate{
             registryAvailable ? registryInfo.AdapterString : L"",
             adapters[index].AdapterLuid,
             segmentsAvailable ? segmentInfo.DedicatedVideoMemorySize : 0,
             segmentsAvailable ? segmentInfo.SharedSystemMemorySize : 0,
+            adapterTypeAvailable &&
+                (adapterType.Value & kHybridIntegratedAdapterFlag) != 0,
         };
         std::wcout << L"D3DKMT_CANDIDATE=" << candidate.description
                    << L" LUID=0x" << std::hex
@@ -140,6 +154,7 @@ std::optional<LiveAdapterInfo> ReadLiveAdapter() {
                    << static_cast<double>(candidate.dedicatedVideoMemory) / kGiB
                    << L" shared="
                    << static_cast<double>(candidate.sharedSystemMemory) / kGiB
+                   << L" integrated=" << candidate.integrated
                    << L"\n";
         bool betterCandidate =
             !selected || candidate.dedicatedVideoMemory >
@@ -222,17 +237,25 @@ std::wstring ToLower(std::wstring value) {
 bool ReadArray(PDH_HCOUNTER counter,
                std::vector<unsigned char>& buffer,
                DWORD& count) {
+    constexpr int kMaxAttempts = 4;
     DWORD size = 0;
-    PDH_STATUS status = PdhGetFormattedCounterArrayW(
-        counter, PDH_FMT_DOUBLE, &size, &count, nullptr);
-    if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) || !size) {
-        return false;
+    count = 0;
+    for (int attempt = 0; attempt < kMaxAttempts; attempt++) {
+        auto* items = buffer.empty()
+                          ? nullptr
+                          : reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
+                                buffer.data());
+        PDH_STATUS status = PdhGetFormattedCounterArrayW(
+            counter, PDH_FMT_DOUBLE, &size, &count, items);
+        if (status == ERROR_SUCCESS) {
+            return true;
+        }
+        if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) || !size) {
+            return false;
+        }
+        buffer.resize(size);
     }
-    buffer.resize(size);
-    return PdhGetFormattedCounterArrayW(
-               counter, PDH_FMT_DOUBLE, &size, &count,
-               reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data())) ==
-           ERROR_SUCCESS;
+    return false;
 }
 
 }  // namespace
@@ -297,6 +320,7 @@ int wmain() {
     luid = liveLuid;
 
     PDH_HQUERY query = nullptr;
+    PDH_HCOUNTER cpuUtilityCounter = nullptr;
     PDH_HCOUNTER gpuCounter = nullptr;
     PDH_HCOUNTER vramCounter = nullptr;
     PDH_HCOUNTER sharedVramCounter = nullptr;
@@ -318,6 +342,13 @@ int wmain() {
         return 3;
     }
 
+    PDH_STATUS cpuUtilityStatus = PdhAddEnglishCounterW(
+        query, L"\\Processor Information(_Total)\\% Processor Utility", 0,
+        &cpuUtilityCounter);
+    if (cpuUtilityStatus != ERROR_SUCCESS) {
+        cpuUtilityCounter = nullptr;
+    }
+
     PDH_STATUS thermalStatus = PdhAddEnglishCounterW(
         query, L"\\Thermal Zone Information(*)\\Temperature", 0,
         &thermalCounter);
@@ -330,6 +361,19 @@ int wmain() {
     if (PdhCollectQueryData(query) != ERROR_SUCCESS) {
         PdhCloseQuery(query);
         return 4;
+    }
+
+    std::optional<double> cpuUtility;
+    if (cpuUtilityCounter) {
+        PDH_FMT_COUNTERVALUE value{};
+        cpuUtilityStatus = PdhGetFormattedCounterValue(
+            cpuUtilityCounter, PDH_FMT_DOUBLE, nullptr, &value);
+        if (cpuUtilityStatus == ERROR_SUCCESS &&
+            (value.CStatus == PDH_CSTATUS_VALID_DATA ||
+             value.CStatus == PDH_CSTATUS_NEW_DATA) &&
+            std::isfinite(value.doubleValue) && value.doubleValue >= 0.0) {
+            cpuUtility = std::clamp(value.doubleValue, 0.0, 100.0);
+        }
     }
 
     std::vector<unsigned char> buffer;
@@ -364,7 +408,8 @@ int wmain() {
     count = 0;
     double vramBytes = 0.0;
     bool vramFound = false;
-    bool useDedicatedMemory = selected.DedicatedVideoMemory > 0;
+    bool useDedicatedMemory =
+        !liveAdapter->integrated && selected.DedicatedVideoMemory > 0;
     PDH_HCOUNTER selectedMemoryCounter =
         useDedicatedMemory ? vramCounter : sharedVramCounter;
     if (ReadArray(selectedMemoryCounter, buffer, count)) {
@@ -418,8 +463,16 @@ int wmain() {
     double percent = totalGb > 0.0 ? usedGb / totalGb * 100.0 : 0.0;
     auto gpuTemperature = ReadGpuTemperature(selected.AdapterLuid);
 
+    if (cpuUtility) {
+        std::wcout << L"CPU_UTILITY=" << *cpuUtility << L"%\n";
+    } else {
+        std::wcout << L"CPU_UTILITY=unavailable add_status=0x" << std::hex
+                   << static_cast<unsigned long>(cpuUtilityStatus) << std::dec
+                   << L"\n";
+    }
     std::wcout << L"GPU=" << selected.Description << L"\n"
                << L"LUID_D3DKMT=" << luid << L"\n"
+               << L"GPU_INTEGRATED=" << liveAdapter->integrated << L"\n"
                << L"GPU_USAGE=" << gpuUsage << L"%\n"
                << L"GPU_MEMORY=" << usedGb << L"/" << totalGb << L" GiB ("
                << (useDedicatedMemory ? L"dedicated, " : L"shared, ")

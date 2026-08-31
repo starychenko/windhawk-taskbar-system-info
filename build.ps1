@@ -1,6 +1,8 @@
 param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'build'),
-    [string]$WindhawkRoot = (Join-Path $env:ProgramFiles 'Windhawk')
+    [string]$WindhawkRoot = (Join-Path $env:ProgramFiles 'Windhawk'),
+    [ValidateSet('x86_64', 'aarch64')]
+    [string]$Architecture = 'x86_64'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -33,7 +35,13 @@ if (-not $engineDirectory) {
     throw "No Windhawk engine installation found in: $engineRoot"
 }
 
-$engineLibrary = Join-Path $engineDirectory.FullName '64\windhawk.lib'
+$engineArchitecture = if ($Architecture -eq 'aarch64') { 'arm64' } else { '64' }
+$compilerTarget = if ($Architecture -eq 'aarch64') {
+    'aarch64-w64-mingw32'
+} else {
+    'x86_64-w64-mingw32'
+}
+$engineLibrary = Join-Path $engineDirectory.FullName "$engineArchitecture\windhawk.lib"
 if (-not (Test-Path -LiteralPath $engineLibrary)) {
     throw "Required path not found: $engineLibrary"
 }
@@ -50,7 +58,12 @@ $modVersion = $versionMatch.Groups[1].Value
 $engineVersion = [version]$engineDirectory.Name
 $windhawkVersion = '0x{0:X2}{1:X2}{2:X2}00' -f `
     $engineVersion.Major, $engineVersion.Minor, $engineVersion.Build
-$outputPath = Join-Path $OutputDirectory "${modId}_${modVersion}.dll"
+$outputName = if ($Architecture -eq 'aarch64') {
+    "${modId}_${modVersion}_arm64.dll"
+} else {
+    "${modId}_${modVersion}.dll"
+}
+$outputPath = Join-Path $OutputDirectory $outputName
 
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 
@@ -81,7 +94,7 @@ $compilerArguments = @(
     '-include'
     'windhawk_api.h'
     '-target'
-    'x86_64-w64-mingw32'
+    $compilerTarget
     '-Wl,--export-all-symbols'
     '-o'
     $outputPath

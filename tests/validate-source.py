@@ -4,8 +4,6 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "taskbar-system-info.wh.cpp"
@@ -37,13 +35,79 @@ def parse_metadata(source: str) -> dict[str, str]:
     return metadata
 
 
+def parse_scalar(value: str) -> str | int | bool:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1]
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    return value
+
+
+def parse_settings(block: str) -> list[dict[str, object]]:
+    """Parse the deliberately small YAML subset used by Windhawk settings.
+
+    Keeping this validator dependency-free is useful on a fresh Windows system,
+    where the bundled Python doesn't necessarily include PyYAML.
+    """
+    settings: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    current_options: list[dict[str, str]] | None = None
+
+    for line_number, raw_line in enumerate(block.splitlines(), 1):
+        if not raw_line.strip():
+            continue
+
+        setting_match = re.fullmatch(r"- ([^:]+):\s*(.*)", raw_line)
+        if setting_match:
+            current = {
+                setting_match.group(1): parse_scalar(setting_match.group(2))
+            }
+            settings.append(current)
+            current_options = None
+            continue
+
+        if current is None:
+            raise AssertionError(
+                f"Settings line {line_number} appears before the first setting"
+            )
+
+        property_match = re.fullmatch(r"  (\$[^:]+(?::[^:]+)?):\s*(.*)", raw_line)
+        if property_match:
+            key, value = property_match.groups()
+            if value:
+                current[key] = parse_scalar(value)
+                current_options = None
+            else:
+                current_options = []
+                current[key] = current_options
+            continue
+
+        option_match = re.fullmatch(r"  - ([^:]+):\s*(.*)", raw_line)
+        if option_match and current_options is not None:
+            current_options.append(
+                {option_match.group(1): str(parse_scalar(option_match.group(2)))}
+            )
+            continue
+
+        raise AssertionError(
+            f"Unsupported settings syntax on line {line_number}: {raw_line!r}"
+        )
+
+    return settings
+
+
 def main() -> int:
     source = SOURCE_PATH.read_text(encoding="utf-8")
     metadata = parse_metadata(source)
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.3.3",
+        "version": "1.4.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -57,9 +121,8 @@ def main() -> int:
     assert metadata.get("name:uk-UA")
     assert metadata.get("description:uk-UA")
 
-    settings = yaml.safe_load(extract_block(source, "WindhawkModSettings"))
-    assert isinstance(settings, list), "Settings root must be a YAML list"
-    assert len(settings) == 25, f"Expected 25 settings, got {len(settings)}"
+    settings = parse_settings(extract_block(source, "WindhawkModSettings"))
+    assert len(settings) == 28, f"Expected 28 settings, got {len(settings)}"
 
     setting_keys: set[str] = set()
     for index, item in enumerate(settings):
@@ -76,6 +139,21 @@ def main() -> int:
                     f"{key}.{localized_key} must be a string, got "
                     f"{type(item[localized_key]).__name__}"
                 )
+
+    monitor = next(item for item in settings if "monitor" in item)
+    assert monitor["monitor"] == 1
+
+    adaptive_colors = next(item for item in settings if "adaptiveColors" in item)
+    assert adaptive_colors["adaptiveColors"] is True
+
+    gpu_memory_mode = next(item for item in settings if "gpuMemoryMode" in item)
+    assert gpu_memory_mode["gpuMemoryMode"] == "auto"
+    for options_key in ("$options", "$options:uk-UA"):
+        options = gpu_memory_mode.get(options_key)
+        assert isinstance(options, list), f"gpuMemoryMode.{options_key} missing"
+        assert {
+            str(next(iter(option))) for option in options if isinstance(option, dict)
+        } == {"auto", "dedicated", "shared"}
 
     temperature_source = next(
         item for item in settings if "temperatureSource" in item
@@ -114,6 +192,7 @@ def main() -> int:
 
     assert "[[clang::no_destroy]] Grid g_widget{nullptr};" in source
     assert "std::optional<std::thread> g_metricsWorker" in source
+    assert "std::shared_ptr<const ModSettings> CurrentSettings()" in source
     assert "std::optional<std::list<FrameworkElement::Loaded_revoker>>" in source
     assert "#elif defined(_M_ARM64)" in source
     assert "0xD503237F" in source
@@ -138,7 +217,7 @@ def main() -> int:
     assert "D3DKMTQueryAdapterInfo" in source
     assert "kAdapterPerfDataQueryType = 62" in source
     assert "ReadWindowsGpuTemperature" in source
-    assert 'value == L"windowsThermalZones"' in source
+    assert 'value == L"windowsThermalZones"' not in source
     assert "static_assert(offsetof(HwInfoHeader, pollTime) == 12);" in source
     assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
 
@@ -146,7 +225,8 @@ def main() -> int:
         source.index("void ReadTemperatures(") : source.index("uint64_t FileTimeValue(")
     ]
     assert "case TemperatureSource::HwInfoAuto:" in temperature_dispatch
-    assert "ReadHwInfoTemperatures(snapshot, settings);" in temperature_dispatch
+    assert "ResolveGpuTemperatureAdapterName(settings)" in temperature_dispatch
+    assert "ReadHwInfoTemperatures(snapshot, settings, gpuAdapterName);" in temperature_dispatch
     assert "if (!snapshot.gpuTemp)" in temperature_dispatch
     assert "ReadWindowsGpuTemperature(snapshot, settings);" in temperature_dispatch
     assert "if (!snapshot.cpuTemp)" in temperature_dispatch
@@ -178,7 +258,8 @@ def main() -> int:
         source.index("std::wstring FormatCapacity(") :
         source.index("enum class AlertLevel")
     ]
-    assert "totalGb < 1.0 ? 1 : 0" in format_capacity
+    assert "totalGb < 4.0" in format_capacity
+    assert "std::abs(totalGb - roundedTotalGb) >= 0.05" in format_capacity
     assert "FormatFixed(totalGb, totalDecimals)" in format_capacity
 
     shared_memory_reader = source[
@@ -187,12 +268,18 @@ def main() -> int:
     ]
     assert "HwInfoHeader header{};" in shared_memory_reader
     assert "std::memcpy(&header, view, sizeof(header));" in shared_memory_reader
+    assert "HwInfoHeader verificationHeader{};" in shared_memory_reader
+    assert "std::memcmp(&header, &verificationHeader," in shared_memory_reader
     assert "header->" not in shared_memory_reader
     assert "mappedSize >= sizeof(HwInfoHeader)" in shared_memory_reader
     assert "FixedAnsiToWide(reading.unit" not in shared_memory_reader
     assert "NormalizeHwInfoTemperature(" in shared_memory_reader
     assert "snapshot.cpuTemp = *value;" in shared_memory_reader
     assert "snapshot.gpuTemp = *value;" in shared_memory_reader
+    assert shared_memory_reader.index("UnmapViewOfFile(view)") < shared_memory_reader.index(
+        "FixedAnsiToWide(sensor.originalName"
+    )
+    assert "g_hwInfoInvalidUnitLogged" in shared_memory_reader
     assert "void ReadHwInfoGadgetRegistry(" in source
     assert "bool foundAny" not in source
 
@@ -221,20 +308,45 @@ def main() -> int:
 
     assert "g_sharedVramCounter" in source
     assert 'L"\\\\GPU Adapter Memory(*)\\\\Shared Usage"' in source
-    assert "adapter->sharedSystemMemory" in source
+    assert "enum class GpuMemoryMode" in source
+    assert "UseSharedGpuMemory(*adapter, settings)" in source
+    assert "kAdapterTypeQueryType = 15" in source
+    assert "kHybridIntegratedAdapterFlag" in source
+    assert "adapter.integrated" in source
     assert "vramTotalBytes" in source
+    assert "bool explicitAdapterMissing = !settings.gpuAdapter.empty() && !adapter" in source
     assert "bool gpuAvailable = false;" in source
-    assert "g_gpuUsageText.Text(snapshot.gpuAvailable" in source
+    assert "SetTextIfChanged(g_gpuUsageText, snapshot.gpuAvailable" in source
     assert 'L"--%"' in source
     assert "RecoverFromGpuAdapterIdentityChange" in source
     assert 'RecreatePdhSources(L"confirmed adapter LUID change"' in source
     assert 'RecordPdhReadFailure(L"counter read")' in source
-    assert "adapter && vramReadStatus == ERROR_SUCCESS" in source
+    assert "bool IsSoftPdhArrayAbsence(PDH_STATUS status)" in source
+    assert "bool adapterSampleMissing" in source
+    assert "IsSoftPdhArrayAbsence(vramReadStatus)" in source
     assert "HasGpuAdapterIdentityChanged(*adapter" in source
-    assert "g_nextGpuIdentityCheck = now + std::chrono::seconds(5)" in source
+    assert "g_unchangedGpuIdentityChecks" in source
+    assert "std::chrono::seconds(300)" in source
     assert "g_pdhGpuSampleWasAvailable && !gpuUsage" not in source
     assert "NeedsWindowsThermalZones" in source
     assert "PdhRemoveCounter(g_thermalZoneCounter)" in source
+    assert 'L"\\\\Processor Information(_Total)\\\\% Processor Utility"' in source
+    assert "ReadCpuUtility" in source
+    assert "bool EnsurePdhQuery(const ModSettings& settings)" in source
+    assert "if (EnsurePdhQuery(settings))" in source
+    assert "std::optional<MetricsSnapshot> CollectMetrics" in source
+    assert "if (!snapshot)" in source
+    assert "g_cachedD3dkmtAdapterHandle" in source
+    assert "GetD3dkmtAdapterHandle" in source
+    assert "constexpr int kMaxArrayReadAttempts = 4" in source
+    assert "status != static_cast<PDH_STATUS>(PDH_MORE_DATA)" in source
+    assert "std::optional<double> ReadCpuUsage()" in source
+    assert "bool cpuAvailable = false;" in source
+    assert "bool ramAvailable = false;" in source
+    assert "snapshot.cpuAvailable" in source
+    assert "snapshot.ramAvailable" in source
+    assert "GpuAdapterIdentityScore" in source
+    assert "GpuTemperatureScore(*sensor, *label, settings.gpuTempSensor," in source
 
     windows_thermal_reader_start = source.index(
         "void ReadWindowsThermalZones(",
@@ -254,8 +366,14 @@ def main() -> int:
         source.index("void* WINAPI TaskbarFrame_Constructor_Hook") :
         source.index("bool HookTaskbarDllSymbols()")
     ]
-    assert "ApplyToCurrentTaskbar(nullptr);" in loaded_hook
+    assert "ApplyOnTaskbarThread();" in loaded_hook
     assert "InjectWidget(sender" not in loaded_hook
+
+    assert 'L"Shell_SecondaryTrayWnd"' in source
+    assert "CSecondaryTaskBand_ITaskListWndSite_vftable" in source
+    assert "CSecondaryTaskBand_GetTaskbarHost_Original" in source
+    assert "FindTaskbarWindowForMonitor" in source
+    assert "RemoveWidgetForMoveContext" in source
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     taskbar_symbols_check = mod_init[
@@ -266,10 +384,45 @@ def main() -> int:
 
     assert "EnsurePdhQuery();" not in mod_init, "PDH must be initialized lazily"
     update_widget = source[
-        source.index("void UpdateWidgetText()") : source.index("void EnsureTimer()")
+        source.index("void UpdateWidgetText(bool force = false)") :
+        source.index("void EnsureTimer()")
     ]
     assert "CollectMetrics(" not in update_widget, "Metrics must stay off the UI thread"
     assert "g_gpuHistory.clear();" not in update_widget
+    assert "if (!force && !hasNewSample)" in update_widget
+    assert "GetMetricsSince(" in update_widget
+    assert "for (const MetricsSnapshot& newSnapshot : newSnapshots)" in update_widget
+    assert "std::deque<PublishedMetricsSnapshot> g_publishedMetrics" in source
+    assert "SetTextIfChanged" in update_widget
+    assert "std::chrono::milliseconds(250)" in source
+    assert "TextTrimming::CharacterEllipsis" in source
+    assert "RefreshThemeBrushes" in source
+    assert "ResolveWidgetTheme" in source
+    assert "kLightGraphColor" in source
+    assert "SPI_GETHIGHCONTRAST" in source
+    assert "COLOR_HIGHLIGHT" in source
+    assert "RefreshThemeBrushes(*settingsSnapshot, true);" in update_widget
+    assert "g_lastAppliedRepeaterMarginLeft" in source
+    assert "margin changed externally" in source
+
+    late_hook = source[
+        source.index("bool TryHookTaskbarViewSymbols(") :
+        source.index("using LoadLibraryExW_t")
+    ]
+    assert "kMaximumHookAttempts = 3" in late_hook
+    assert "g_taskbarViewDllLoaded = false" in late_hook
+    assert "Taskbar.View symbol hook failed" in late_hook
+
+    metrics_worker = source[
+        source.index("void MetricsWorkerProc()") : source.index("bool StartMetricsWorker()")
+    ]
+    wait_failed = metrics_worker[
+        metrics_worker.index("if (waitResult == WAIT_FAILED)") :
+        metrics_worker.index("settings = CurrentSettings();", metrics_worker.index("if (waitResult == WAIT_FAILED)"))
+    ]
+    assert "break;" not in wait_failed
+    assert "std::this_thread::sleep_for" in wait_failed
+    assert "else if (waitResult == WAIT_OBJECT_0)" in metrics_worker
 
     inject_widget = source[
         source.index("bool InjectWidget(") : source.index("using RunFromWindowThreadProc")
@@ -293,6 +446,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (AssertionError, OSError, yaml.YAMLError) as error:
+    except (AssertionError, OSError) as error:
         print(f"Source validation failed: {error}", file=sys.stderr)
         raise SystemExit(1)
