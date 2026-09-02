@@ -290,6 +290,10 @@ def main() -> int:
     assert "g_hwInfoInvalidUnitLogged" in shared_memory_reader
     assert "void ReadHwInfoGadgetRegistry(" in source
     assert "bool foundAny" not in source
+    assert "HwInfoGadgetRegistryCache" in source
+    assert "g_hwInfoGadgetRegistryCache.cpuIndex" in source
+    assert "g_hwInfoGadgetRegistryCache.gpuIndex" in source
+    assert "kGadgetRegistryRescanInterval" in source
 
     normalize_temperature = source[
         source.index("std::optional<double> NormalizeTemperature(") :
@@ -321,6 +325,13 @@ def main() -> int:
     assert "kAdapterTypeQueryType = 15" in source
     assert "kHybridIntegratedAdapterFlag" in source
     assert "adapter.integrated" in source
+    integrated_gpu_heuristic = source[
+        source.index("bool LooksLikeIntegratedGpu(") :
+        source.index("bool UseSharedGpuMemory(")
+    ]
+    assert "kMaximumIntegratedCarveout" in integrated_gpu_heuristic
+    assert "adapter.sharedSystemMemory > 0" in integrated_gpu_heuristic
+    assert 'Contains(name, L"iris")' not in integrated_gpu_heuristic
     assert "vramTotalBytes" in source
     assert "bool explicitAdapterMissing = !settings.gpuAdapter.empty() && !adapter" in source
     assert "bool gpuAvailable = false;" in source
@@ -394,33 +405,55 @@ def main() -> int:
     assert "RemoveWidgetForMoveContext" in source
     assert "EnsureConfiguredTaskbarPlacement" in source
     assert 'Wh_Log(L"Taskbar topology changed; moving the widget")' in source
+    assert 'Wh_Log(L"Retrying taskbar placement")' in source
     assert "ApplyOnTaskbarUiThread" in source
     assert "g_nextPlacementRetry" in source
     assert 'L"Taskbar placement failed; retrying in %u seconds"' in source
-    assert "CoreDispatcherPriority::Normal" in source
-    assert "CoreDispatcherPriority::Low" not in source
-    assert "g_placementApplyAction = dispatcher.RunAsync(" in source
+    assert "CoreDispatcher" not in source
+    assert "RunAsync(" not in source
+    assert "g_placementApplyAction" not in source
     assert "ApplyLoadedFrameFallback(context->fallbackFrame" in source
-    assert "GetSystemMetrics(SM_CMONITORS)" in source
-    assert "GetDisplayTopologyFingerprint()" in source
+    assert "GetDisplayTopologyFingerprint(monitors)" in source
+    assert "FindConfiguredTaskbarWindow(monitors, false)" in source
     assert "g_placementIsFallback" in source
     assert "g_placementLocationUnknown" in source
     assert "g_hasFailedPlacementTarget" in source
     assert 'L"Monitor selection is unavailable for the direct-frame fallback"' in source
+    assert "kMaximumUnknownPlacementProbeFailures" in source
+    assert "g_unknownPlacementProbesSuspended" in source
     assert "FindAnyWindowOnTaskbarThread(targetWindow)" not in source
 
-    ensure_timer = source[
-        source.index("void EnsureTimer()") : source.index("ColumnDefinition PixelColumn")
+    timer_management = source[
+        source.index("void UpdateTimerInterval()") :
+        source.index("ColumnDefinition PixelColumn")
     ]
-    assert "g_taskbarThreadId = GetCurrentThreadId();" in ensure_timer
-    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" in ensure_timer
+    assert "g_taskbarThreadId = GetCurrentThreadId();" in timer_management
+    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" in timer_management
+    assert "void StopTimer()" in timer_management
 
     placement_wrapper = source[
         source.index("void ApplyOnTaskbarUiThread(void* contextValue)") :
         source.index("void ApplyOnTaskbarThread(")
     ]
-    assert placement_wrapper.count("EnsureTimer();") >= 1
-    assert 'L"Restoring the taskbar placement timer failed: %08X"' in placement_wrapper
+    assert "EnsureTimer();" not in placement_wrapper
+
+    remove_widget = source[
+        source.index("void RemoveWidget()") : source.index("bool InjectWidget(")
+    ]
+    assert "g_timer.Stop()" not in remove_widget
+    assert "UpdateTimerInterval();" in remove_widget
+    remove_taskbar = source[
+        source.index("void RemoveFromCurrentTaskbar(") :
+        source.index("void ResetPlacementRetryState(")
+    ]
+    assert "StopTimer();" in remove_taskbar
+
+    placement_impl = source[
+        source.index("void ApplyOnTaskbarUiThreadImpl(") :
+        source.index("void ApplyOnTaskbarUiThread(")
+    ]
+    assert "HWND currentWindow = g_taskbarWindow.load();" in placement_impl
+    assert "FindRememberedTaskbarWindow()" not in placement_impl
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     taskbar_symbols_check = mod_init[
