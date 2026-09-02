@@ -285,15 +285,25 @@ def main() -> int:
     assert "snapshot.cpuTemp = *value;" in shared_memory_reader
     assert "snapshot.gpuTemp = *value;" in shared_memory_reader
     assert shared_memory_reader.index("UnmapViewOfFile(view)") < shared_memory_reader.index(
-        "FixedAnsiToWide(sensor.originalName"
+        "FixedAnsiToWide("
     )
     assert "g_hwInfoInvalidUnitLogged" in shared_memory_reader
+    assert "HwInfoSharedMemoryCache" in source
+    assert "g_hwInfoSharedMemoryCache.cpuReadingIndex" in shared_memory_reader
+    assert "g_hwInfoSharedMemoryCache.gpuReadingIndex" in shared_memory_reader
+    assert "cachedCpuReading" in shared_memory_reader
+    assert "cachedGpuReading" in shared_memory_reader
+    assert "fullScanCopied" in shared_memory_reader
+    assert "kSharedMemoryRescanInterval" in shared_memory_reader
+    assert "kSharedMemoryPartialRescanInterval" in shared_memory_reader
     assert "void ReadHwInfoGadgetRegistry(" in source
     assert "bool foundAny" not in source
     assert "HwInfoGadgetRegistryCache" in source
     assert "g_hwInfoGadgetRegistryCache.cpuIndex" in source
     assert "g_hwInfoGadgetRegistryCache.gpuIndex" in source
     assert "kGadgetRegistryRescanInterval" in source
+    assert "kGadgetRegistryPartialRescanInterval" in source
+    assert "[[clang::no_destroy]] HwInfoGadgetRegistryCache" not in source
 
     normalize_temperature = source[
         source.index("std::optional<double> NormalizeTemperature(") :
@@ -330,8 +340,10 @@ def main() -> int:
         source.index("bool UseSharedGpuMemory(")
     ]
     assert "kMaximumIntegratedCarveout" in integrated_gpu_heuristic
-    assert "adapter.sharedSystemMemory > 0" in integrated_gpu_heuristic
-    assert 'Contains(name, L"iris")' not in integrated_gpu_heuristic
+    assert "adapter.sharedSystemMemory == 0" in integrated_gpu_heuristic
+    assert 'Contains(name, L"iris")' in integrated_gpu_heuristic
+    assert "radeonMobileModel" in integrated_gpu_heuristic
+    assert "intelArcGraphics" in integrated_gpu_heuristic
     assert "vramTotalBytes" in source
     assert "bool explicitAdapterMissing = !settings.gpuAdapter.empty() && !adapter" in source
     assert "bool gpuAvailable = false;" in source
@@ -409,6 +421,7 @@ def main() -> int:
     assert "ApplyOnTaskbarUiThread" in source
     assert "g_nextPlacementRetry" in source
     assert 'L"Taskbar placement failed; retrying in %u seconds"' in source
+    assert 'L"Taskbar placement fell back; re-checking in %u seconds"' in source
     assert "CoreDispatcher" not in source
     assert "RunAsync(" not in source
     assert "g_placementApplyAction" not in source
@@ -422,6 +435,9 @@ def main() -> int:
     assert "kMaximumUnknownPlacementProbeFailures" in source
     assert "g_unknownPlacementProbesSuspended" in source
     assert "FindAnyWindowOnTaskbarThread(targetWindow)" not in source
+    assert "FindReadyTaskbarFrame" in source
+    assert "ApplyWidgetToTaskbarWindow(targetWindow, targetFrame)" in source
+    assert "ApplyOnTaskbarThread(nullptr, false, false, targetWindow)" in source
 
     timer_management = source[
         source.index("void UpdateTimerInterval()") :
@@ -454,6 +470,21 @@ def main() -> int:
     ]
     assert "HWND currentWindow = g_taskbarWindow.load();" in placement_impl
     assert "FindRememberedTaskbarWindow()" not in placement_impl
+    assert "context->requestedWindow" in placement_impl
+
+    apply_settings = source[
+        source.index("void ApplyWidgetSettings()") :
+        source.index("void UpdateWidgetText(")
+    ]
+    assert "UpdateTimerInterval();" in apply_settings
+    assert "g_timer.Interval(" not in apply_settings
+
+    close_metric_sources = source[
+        source.index("void CloseMetricSources()") :
+        source.index("bool TearDownTaskbarUi()")
+    ]
+    assert "g_hwInfoSharedMemoryCache = {};" in close_metric_sources
+    assert "g_hwInfoGadgetRegistryCache = {};" in close_metric_sources
 
     mod_init = source[source.index("BOOL Wh_ModInit()") : source.index("void Wh_ModAfterInit()")]
     taskbar_symbols_check = mod_init[
@@ -474,7 +505,7 @@ def main() -> int:
     assert "for (const MetricsSnapshot& newSnapshot : newSnapshots)" in update_widget
     assert "std::deque<PublishedMetricsSnapshot> g_publishedMetrics" in source
     assert "SetTextIfChanged" in update_widget
-    assert "std::chrono::milliseconds(250)" in source
+    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" in source
     assert "TextTrimming::CharacterEllipsis" in source
     assert "RefreshThemeBrushes" in source
     assert "ResolveWidgetTheme" in source
