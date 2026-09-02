@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "taskbar-system-info.wh.cpp"
+README_PATH = ROOT / "README.md"
 BUILD_PATH = ROOT / "build.ps1"
 METRICS_SMOKE_PATH = ROOT / "tests" / "metrics-smoke.cpp"
 
@@ -105,13 +106,14 @@ def parse_settings(block: str) -> list[dict[str, object]]:
 
 def main() -> int:
     source = SOURCE_PATH.read_text(encoding="utf-8")
+    repository_readme = README_PATH.read_text(encoding="utf-8")
     build_script = BUILD_PATH.read_text(encoding="utf-8")
     metrics_smoke = METRICS_SMOKE_PATH.read_text(encoding="utf-8")
     metadata = parse_metadata(source)
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.4.0",
+        "version": "1.5.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -193,6 +195,18 @@ def main() -> int:
 
     readme = extract_block(source, "WindhawkModReadme")
     assert "raw.githubusercontent.com/starychenko/windhawk-taskbar-system-info/" in readme
+    for documentation_marker in (
+        "## Quick start",
+        "## Setting up HWiNFO temperatures",
+        "Shared Memory Support",
+        "Report to Gadget",
+        "12 hours",
+        "## Troubleshooting",
+    ):
+        assert documentation_marker in readme
+        assert documentation_marker in repository_readme
+    assert "## Settings guide" in readme
+    assert "## Settings reference" in repository_readme
 
     assert "[[clang::no_destroy]] Grid g_widget{nullptr};" in source
     assert "std::optional<std::thread> g_metricsWorker" in source
