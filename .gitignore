@@ -1,3 +1,4 @@
 /build/
 /build-*/
 /tests/metrics-smoke.exe
+/tests/__pycache__/

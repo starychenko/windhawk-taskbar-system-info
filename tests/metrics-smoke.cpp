@@ -234,6 +234,94 @@ std::wstring ToLower(std::wstring value) {
     return value;
 }
 
+std::wstring NormalizeAdapterIdentity(std::wstring value) {
+    value = ToLower(std::move(value));
+    for (wchar_t& character : value) {
+        if (!std::iswalnum(character)) {
+            character = L' ';
+        }
+    }
+    std::wstring normalized;
+    bool previousSpace = true;
+    for (wchar_t character : value) {
+        bool space = std::iswspace(character) != 0;
+        if (space) {
+            if (!previousSpace) {
+                normalized.push_back(L' ');
+            }
+        } else {
+            normalized.push_back(character);
+        }
+        previousSpace = space;
+    }
+    if (!normalized.empty() && normalized.back() == L' ') {
+        normalized.pop_back();
+    }
+
+    std::wstring filtered;
+    size_t start = 0;
+    while (start < normalized.size()) {
+        size_t end = normalized.find(L' ', start);
+        if (end == std::wstring::npos) {
+            end = normalized.size();
+        }
+        std::wstring token = normalized.substr(start, end - start);
+        if (token != L"r" && token != L"tm") {
+            if (!filtered.empty()) {
+                filtered.push_back(L' ');
+            }
+            filtered.append(token);
+        }
+        start = end + 1;
+    }
+    return filtered;
+}
+
+bool LooksLikeIntegratedGpu(const LiveAdapterInfo& adapter) {
+    if (adapter.integrated || adapter.dedicatedVideoMemory == 0) {
+        return true;
+    }
+    constexpr uint64_t kMaximumIntegratedCarveout = 512ull * 1024 * 1024;
+    if (adapter.dedicatedVideoMemory > kMaximumIntegratedCarveout ||
+        adapter.sharedSystemMemory == 0) {
+        return false;
+    }
+
+    std::wstring name = NormalizeAdapterIdentity(adapter.description);
+    bool radeonMobileModel = false;
+    if (name.find(L"radeon") != std::wstring::npos &&
+        name.find(L"radeon hd") == std::wstring::npos) {
+        size_t start = 0;
+        while (start < name.size()) {
+            size_t end = name.find(L' ', start);
+            if (end == std::wstring::npos) {
+                end = name.size();
+            }
+            std::wstring token = name.substr(start, end - start);
+            if (token.size() == 4 && token.back() == L'm' &&
+                std::all_of(token.begin(), token.end() - 1,
+                            [](wchar_t character) {
+                                return std::iswdigit(character) != 0;
+                            })) {
+                radeonMobileModel = true;
+                break;
+            }
+            start = end + 1;
+        }
+    }
+
+    bool intelArc = name.find(L"intel") != std::wstring::npos &&
+                    name.find(L"arc") != std::wstring::npos;
+    return name.find(L"uhd graphics") != std::wstring::npos ||
+           (name.find(L"intel") != std::wstring::npos &&
+            name.find(L"hd graphics") != std::wstring::npos) ||
+           name.find(L"iris") != std::wstring::npos ||
+           name.find(L"radeon graphics") != std::wstring::npos ||
+           name.find(L"vega") != std::wstring::npos ||
+           name.find(L"integrated") != std::wstring::npos ||
+           radeonMobileModel || intelArc;
+}
+
 bool ReadArray(PDH_HCOUNTER counter,
                std::vector<unsigned char>& buffer,
                DWORD& count) {
@@ -261,6 +349,25 @@ bool ReadArray(PDH_HCOUNTER counter,
 }  // namespace
 
 int wmain() {
+    constexpr uint64_t kMiB = 1024ull * 1024;
+    constexpr uint64_t kSyntheticSharedMemory = 8ull * 1024 * 1024 * 1024;
+    if (!LooksLikeIntegratedGpu({L"Intel(R) Arc(TM) 140V GPU", {},
+                                 128 * kMiB, kSyntheticSharedMemory, false}) ||
+        !LooksLikeIntegratedGpu({L"Intel(R) HD Graphics 4000", {},
+                                 128 * kMiB, kSyntheticSharedMemory, false}) ||
+        !LooksLikeIntegratedGpu({L"AMD Radeon 890M", {}, 512 * kMiB,
+                                 kSyntheticSharedMemory, false}) ||
+        LooksLikeIntegratedGpu({L"AMD Radeon HD 6450", {}, 512 * kMiB,
+                                kSyntheticSharedMemory, false}) ||
+        LooksLikeIntegratedGpu({L"AMD Radeon HD 6470M", {}, 512 * kMiB,
+                                kSyntheticSharedMemory, false}) ||
+        LooksLikeIntegratedGpu({L"Intel Arc A380", {}, 6ull * 1024 * 1024 *
+                                                          1024,
+                                kSyntheticSharedMemory, false})) {
+        std::wcerr << L"Synthetic integrated-GPU classification failed\n";
+        return 8;
+    }
+
     auto liveAdapter = ReadLiveAdapter();
     if (!liveAdapter) {
         std::wcerr << L"D3DKMT adapter enumeration failed\n";
@@ -409,7 +516,8 @@ int wmain() {
     double vramBytes = 0.0;
     bool vramFound = false;
     bool useDedicatedMemory =
-        !liveAdapter->integrated && selected.DedicatedVideoMemory > 0;
+        !LooksLikeIntegratedGpu(*liveAdapter) &&
+        selected.DedicatedVideoMemory > 0;
     PDH_HCOUNTER selectedMemoryCounter =
         useDedicatedMemory ? vramCounter : sharedVramCounter;
     if (ReadArray(selectedMemoryCounter, buffer, count)) {

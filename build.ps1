@@ -77,7 +77,6 @@ $compilerArguments = @(
     '-DUNICODE'
     '-D_UNICODE'
     '-DWIN32_LEAN_AND_MEAN'
-    '-Wno-unneeded-internal-declaration'
     '-DWINVER=0x0A00'
     '-D_WIN32_WINNT=0x0A00'
     '-D_WIN32_IE=0x0A00'
