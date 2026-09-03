@@ -308,43 +308,10 @@ bool LooksLikeIntegratedGpu(const GpuAdapterInfo& adapter) {
     if (adapter.integrated || adapter.dedicatedVideoMemory == 0) {
         return true;
     }
+
     constexpr uint64_t kMaximumIntegratedCarveout = 512ull * 1024 * 1024;
-    if (adapter.dedicatedVideoMemory > kMaximumIntegratedCarveout ||
-        adapter.sharedSystemMemory == 0) {
-        return false;
-    }
-
-    std::wstring name = NormalizeAdapterIdentity(adapter.description);
-    bool radeonIntegratedModel = false;
-    if (Contains(name, L"radeon") && !Contains(name, L"radeon hd")) {
-        auto tokens = IdentityTokens(name);
-        for (size_t i = 0; i < tokens.size(); i++) {
-            const std::wstring& token = tokens[i];
-            bool hasModelSuffix = token.size() > 1 &&
-                                  (token.back() == L'm' ||
-                                   token.back() == L's') &&
-                                  std::all_of(
-                                      token.begin(), token.end() - 1,
-                                      [](wchar_t character) {
-                                          return std::iswdigit(character) != 0;
-                                      });
-            bool followedByGraphics =
-                HasDigit(token) && i + 1 < tokens.size() &&
-                tokens[i + 1] == L"graphics";
-            if (hasModelSuffix || followedByGraphics) {
-                radeonIntegratedModel = true;
-                break;
-            }
-        }
-    }
-
-    bool intelArc = Contains(name, L"intel") && Contains(name, L"arc");
-    return Contains(name, L"uhd graphics") ||
-           (Contains(name, L"intel") && Contains(name, L"hd graphics")) ||
-           Contains(name, L"iris") ||
-           Contains(name, L"radeon graphics") || Contains(name, L"vega") ||
-           Contains(name, L"integrated") ||
-           radeonIntegratedModel || intelArc;
+    return adapter.dedicatedVideoMemory <= kMaximumIntegratedCarveout &&
+           adapter.sharedSystemMemory > adapter.dedicatedVideoMemory;
 }
 
 bool ReadArray(PDH_HCOUNTER counter,
@@ -385,9 +352,9 @@ int wmain() {
         !LooksLikeIntegratedGpu({L"AMD Radeon(TM) 8060S Graphics", {},
                                  512 * kMiB, kSyntheticSharedMemory, false}) ||
         LooksLikeIntegratedGpu({L"AMD Radeon HD 6450", {}, 512 * kMiB,
-                                kSyntheticSharedMemory, false}) ||
+                                256 * kMiB, false}) ||
         LooksLikeIntegratedGpu({L"AMD Radeon HD 6470M", {}, 512 * kMiB,
-                                kSyntheticSharedMemory, false}) ||
+                                256 * kMiB, false}) ||
         LooksLikeIntegratedGpu({L"Intel Arc A380", {}, 6ull * 1024 * 1024 *
                                                           1024,
                                 kSyntheticSharedMemory, false})) {

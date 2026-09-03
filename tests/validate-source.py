@@ -244,15 +244,13 @@ def main() -> int:
     assert "0xD503237F" in source
     assert "SendMessageW(window, message" in source
     assert "SendMessageTimeoutW(" not in source
-    assert "std::shared_ptr<void> context" in source
-    assert "g_windowThreadDispatchMutex" in source
+    assert "void* context" in source
+    assert "g_windowThreadDispatchMutex" not in source
     assert "g_windowThreadCallbackRegistry" in source
-    assert "std::optional<std::unordered_map<" in source
+    assert "std::unordered_map<ULONG_PTR, WindowThreadCallbackContext*>" in source
     assert "g_nextWindowThreadCallbackToken" in source
     assert "static_cast<LPARAM>(callbackToken)" in source
-    assert "reinterpret_cast<LPARAM>(callbackContext)" not in source
-    assert "while (true)" in source
-    assert "if (UnhookWindowsHookEx(hook))" in source
+    assert "attempt < 3" in source
     assert "ERROR_INVALID_HOOK_HANDLE" in source
     assert "size_t elementOffset = 0;" in source
     assert 'Wh_Log(L"Removing stale Taskbar System Info widget")' in source
@@ -313,7 +311,10 @@ def main() -> int:
     assert "D3DKMT_SEGMENTSIZEINFO" in source
     assert "GetLiveD3dkmtAdapterInfo" in source
     assert "ResolveCurrentGpuAdapterInfo" in source
-    assert "HasGpuAdapterIdentityChanged" in source
+    assert "HasGpuAdapterIdentityChanged" not in source
+    assert "g_lastResolvedGpuAdapterLuid" in source
+    assert "g_gpuAdapterIdentityChanged" in source
+    assert 'RecreatePdhSources(L"confirmed GPU adapter LUID change"' in source
     assert "!candidate.description.empty()" in source
     assert "AddPdhCounter(" in source
     assert "g_nextPdhCounterRetry" in source
@@ -356,32 +357,26 @@ def main() -> int:
     assert "HwInfoSharedMemoryCache" in source
     assert "g_hwInfoSharedMemoryCache.cpuReadingIndex" in shared_memory_reader
     assert "g_hwInfoSharedMemoryCache.gpuReadingIndex" in shared_memory_reader
-    assert "g_hwInfoSharedMemoryCache.cpuIdentity" in shared_memory_reader
-    assert "g_hwInfoSharedMemoryCache.gpuIdentity" in shared_memory_reader
-    assert "HwInfoReadingIdentity" in source
-    assert "raw.sensor.sensorId" in shared_memory_reader
-    assert "raw.sensor.sensorInstance" in shared_memory_reader
-    assert "raw.reading.readingId" in shared_memory_reader
-    assert "kHwInfoCachedReadingFailureLimit" in shared_memory_reader
+    assert "HwInfoReadingIdentity" not in source
+    assert "kHwInfoCachedReadingFailureLimit" not in source
     assert "cachedCpuReading" in shared_memory_reader
     assert "cachedGpuReading" in shared_memory_reader
     assert "fullScanCopied" in shared_memory_reader
     assert "kSharedMemoryRescanInterval" in shared_memory_reader
-    assert "kSharedMemoryPartialRescanInterval" in shared_memory_reader
-    assert "GetHwInfoRescanInterval(" in shared_memory_reader
-    assert "kHwInfoFastPartialRescanLimit" in source
+    assert "kHwInfoUnavailableRetryInterval" in shared_memory_reader
+    assert "kSharedMemoryPartialRescanInterval" not in source
+    assert "GetHwInfoRescanInterval(" not in source
+    assert "kHwInfoFastPartialRescanLimit" not in source
     assert "void ReadHwInfoGadgetRegistry(" in source
     assert "bool foundAny" not in source
     assert "HwInfoGadgetRegistryCache" in source
     assert "g_hwInfoGadgetRegistryCache.cpuIndex" in source
     assert "g_hwInfoGadgetRegistryCache.gpuIndex" in source
-    assert "g_hwInfoGadgetRegistryCache.cpuIdentity" in source
-    assert "g_hwInfoGadgetRegistryCache.gpuIdentity" in source
-    assert "reading->sensor != cachedIdentity->sensor" in source
-    assert "true, needsCpu" in source
-    assert "false, needsGpu" in source
+    assert "HwInfoGadgetReadingIdentity" not in source
+    assert "readCached(g_hwInfoGadgetRegistryCache.cpuIndex, true, needsCpu)" in source
+    assert "readCached(g_hwInfoGadgetRegistryCache.gpuIndex, false, needsGpu)" in source
     assert "kGadgetRegistryRescanInterval" in source
-    assert "kGadgetRegistryPartialRescanInterval" in source
+    assert "kGadgetRegistryPartialRescanInterval" not in source
     assert "[[clang::no_destroy]] HwInfoGadgetRegistryCache" not in source
 
     normalize_temperature = source[
@@ -419,35 +414,28 @@ def main() -> int:
         source.index("bool UseSharedGpuMemory(")
     ]
     assert "kMaximumIntegratedCarveout" in integrated_gpu_heuristic
-    assert "adapter.sharedSystemMemory == 0" in integrated_gpu_heuristic
-    assert 'Contains(name, L"iris")' in integrated_gpu_heuristic
-    assert "radeonIntegratedModel" in integrated_gpu_heuristic
-    assert 'Contains(name, L"radeon hd")' in integrated_gpu_heuristic
-    assert "token.back() == L's'" in integrated_gpu_heuristic
-    assert 'tokens[i + 1] == L"graphics"' in integrated_gpu_heuristic
-    assert 'Contains(name, L"hd graphics")' in integrated_gpu_heuristic
-    assert "bool intelArc" in integrated_gpu_heuristic
-    assert 'Contains(name, L"intel") && Contains(name, L"arc")' in integrated_gpu_heuristic
-    assert "intelArcGraphics" not in integrated_gpu_heuristic
+    assert "adapter.sharedSystemMemory > adapter.dedicatedVideoMemory" in integrated_gpu_heuristic
+    assert "NormalizeAdapterIdentity(adapter.description)" not in integrated_gpu_heuristic
     assert "vramTotalBytes" in source
-    assert "bool explicitAdapterMissing = !settings.gpuAdapter.empty() && !adapter" in source
+    assert "bool gpuAdapterInstanceFound = false" in source
+    assert "adapter && gpuAdapterInstanceFound" in source
+    assert "generic HWiNFO matching can" in source
+    assert "!g_hasResolvedGpuAdapterIdentity" in source
     assert "bool gpuAvailable = false;" in source
     assert "SetTextIfChanged(g_gpuUsageText, snapshot.gpuAvailable" in source
     assert 'L"--%"' in source
-    assert "RecoverFromGpuAdapterIdentityChange" in source
+    assert "RecoverFromMissingGpuSample" in source
     assert "g_nextGpuAdapterResolve" in source
     assert 'L"No GPU adapter found; retrying automatically"' in source
-    assert "RecordD3dkmtAdapterFailure" in source
-    assert "RecordPdhEmptyAdapterSample" in source
-    assert "g_nextPdhEmptyRecovery" in source
-    assert 'RecreatePdhSources(L"confirmed adapter LUID change"' in source
+    assert "RecordD3dkmtAdapterFailure" not in source
+    assert "RecordPdhEmptyAdapterSample" not in source
+    assert "g_nextPdhEmptyRecovery" not in source
     assert 'RecordPdhReadFailure(L"counter read")' in source
     assert "bool IsSoftPdhArrayAbsence(PDH_STATUS status)" in source
     assert "bool adapterSampleMissing" in source
     assert "IsSoftPdhArrayAbsence(vramReadStatus)" in source
-    assert "HasGpuAdapterIdentityChanged(*adapter" in source
-    assert "g_unchangedGpuIdentityChecks" in source
-    assert "std::chrono::seconds(300)" in source
+    assert "HasGpuAdapterIdentityChanged(*adapter" not in source
+    assert "g_unchangedGpuIdentityChecks" not in source
     assert "g_pdhGpuSampleWasAvailable && !gpuUsage" not in source
     assert "NeedsWindowsThermalZones" in source
     assert "PdhRemoveCounter(g_thermalZoneCounter)" in source
@@ -506,7 +494,6 @@ def main() -> int:
     assert "FindTaskbarWindowForMonitor" in source
     assert "RemoveWidgetForMoveContext" in source
     assert "EnsureConfiguredTaskbarPlacement" in source
-    assert 'Wh_Log(L"Taskbar topology changed; moving the widget")' in source
     assert 'Wh_Log(L"Retrying taskbar placement")' in source
     assert "ApplyOnTaskbarUiThread" in source
     assert "g_nextPlacementRetry" in source
@@ -516,27 +503,31 @@ def main() -> int:
     assert "RunAsync(" not in source
     assert "g_placementApplyAction" not in source
     assert "ApplyLoadedFrameFallback(context->fallbackFrame" in source
-    assert "GetDisplayTopologyFingerprint(monitors)" in source
+    assert "GetDisplayTopologyFingerprint" not in source
     assert "FindConfiguredTaskbarWindow(monitors, false)" in source
     assert "g_placementIsFallback" in source
     assert "g_placementLocationUnknown" in source
     assert "g_hasFailedPlacementTarget" in source
     assert 'L"Monitor selection is unavailable for the direct-frame fallback"' in source
-    assert "kMaximumUnknownPlacementProbeFailures" in source
-    assert "g_unknownPlacementProbesSuspended" in source
+    assert "kMaximumUnknownPlacementProbeFailures" not in source
+    assert "g_unknownPlacementProbesSuspended" not in source
     assert "FindAnyWindowOnTaskbarThread(targetWindow)" not in source
     assert "FindReadyTaskbarFrame" in source
     assert "FrameworkElement FindTaskbarFrame(HWND taskbarWindow)" in source
     assert source.count('winrt::get_class_name(child) == L"Taskbar.TaskbarFrame"') == 1
     assert "ApplyWidgetToTaskbarWindow(targetWindow, targetFrame)" in source
-    assert "ApplyOnTaskbarThread(nullptr, false, false, targetWindow)" in source
+    assert "ApplyOnTaskbarThread(nullptr, false, targetWindow)" in source
 
     timer_management = source[
         source.index("void UpdateTimerInterval()") :
         source.index("ColumnDefinition PixelColumn")
     ]
     assert "g_taskbarThreadId = GetCurrentThreadId();" in timer_management
-    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" in timer_management
+    assert "CurrentSettings()->updateInterval" not in timer_management
+    assert "std::chrono::milliseconds(1000)" in timer_management
+    assert "g_lastRenderedMetricsSequence" in timer_management
+    assert "std::chrono::milliseconds(250)" in timer_management
+    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" not in timer_management
     assert "g_timer.Interval() != interval" in timer_management
     assert "bool StopTimer()" in timer_management
 
@@ -570,7 +561,7 @@ def main() -> int:
     assert "context->succeeded = RemoveWidget();" in remove_for_move
     assert "g_lastMonitorCount" not in source
     assert "PinModuleAfterFailedTaskbarTeardown" not in source
-    assert "kMaximumTeardownAttempts" in source
+    assert "kMaximumTeardownAttempts" not in source
 
     placement_impl = source[
         source.index("void ApplyOnTaskbarUiThreadImpl(") :
@@ -595,7 +586,7 @@ def main() -> int:
     ]
     assert "g_hwInfoSharedMemoryCache = {};" in close_metric_sources
     assert "g_hwInfoGadgetRegistryCache = {};" in close_metric_sources
-    assert "g_nextPdhEmptyRecovery = {};" in close_metric_sources
+    assert "g_hwInfoInvalidUnitLogged = false;" in close_metric_sources
 
     constructor_hook = source[
         source.index("void* WINAPI TaskbarFrame_Constructor_Hook") :
@@ -607,8 +598,7 @@ def main() -> int:
     assert "g_taskbarUiResourcesRegistered = true;" in constructor_hook
 
     assert "g_placementApplyPending" in source
-    assert "g_resetUnknownPlacementProbesPending" in source
-    assert "g_resetUnknownPlacementProbesPending.exchange(false)" in source
+    assert "g_resetUnknownPlacementProbesPending" not in source
     assert "placement remains pending" in source
     assert "StartPlacementRetryWorker()" in source
     assert "StopPlacementRetryWorker()" in source
@@ -622,13 +612,12 @@ def main() -> int:
     assert "g_taskbarUiResourcesRegistered" in source
     assert "g_windowThreadCallbackRegistry.reset();" in source
     assert "attemptedThreadIds" in source
-    assert "kGpuAdapterCacheStaleGrace" in source
-    assert "kGpuAdapterStaleFailureLimit" in source
-    assert "g_lastSuccessfulGpuAdapterResolve" in source
-    assert "now - g_lastSuccessfulGpuAdapterResolve" in source
+    assert "kGpuAdapterCacheStaleGrace" not in source
+    assert "kGpuAdapterStaleFailureLimit" not in source
+    assert "g_lastSuccessfulGpuAdapterResolve" not in source
     assert source.count("InvalidateGpuAdapterCache();") >= 3
-    assert source.count("ResetPdhEmptyAdapterRecovery();") >= 2
-    assert source.count("g_hwInfoSharedMemoryCache.nextFullScan = {};") >= 5
+    assert "ResetPdhEmptyAdapterRecovery" not in source
+    assert source.count("g_hwInfoSharedMemoryCache.nextFullScan = {};") >= 2
     assert "ApplyThemeOpacities(settings);" in source
     assert "settings.adaptiveColors && g_cachedHighContrast" in source
     assert "ResolveThemeOpacities" in source
@@ -662,9 +651,10 @@ def main() -> int:
     assert "if (!force && !hasNewSample)" in update_widget
     assert "GetMetricsSince(" in update_widget
     assert "for (const MetricsSnapshot& newSnapshot : newSnapshots)" in update_widget
+    assert "UpdateTimerInterval();" in update_widget
     assert "std::deque<PublishedMetricsSnapshot> g_publishedMetrics" in source
     assert "SetTextIfChanged" in update_widget
-    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" in source
+    assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" not in source
     assert "TextTrimming::CharacterEllipsis" in source
     assert "RefreshThemeBrushes" in source
     assert "ResolveWidgetTheme" in source
@@ -682,19 +672,20 @@ def main() -> int:
     assert "margin changed externally" in source
 
     late_hook = source[
-        source.index("bool TryHookTaskbarViewSymbols(") :
+        source.index("bool HandleLoadedModuleIfTaskbarView(") :
         source.index("using LoadLibraryExW_t")
     ]
-    assert "kMaximumTaskbarViewHookAttempts" in late_hook
-    assert "g_taskbarViewDllLoaded = false" in late_hook
+    assert "g_taskbarViewHookAttempted.exchange(true)" in late_hook
+    assert "g_taskbarViewDllLoaded = true;" in late_hook
     assert "Taskbar.View symbol hook failed" in late_hook
     load_library_hook_start = source.index("HMODULE WINAPI LoadLibraryExW_Hook")
     load_library_hook = source[
         load_library_hook_start :
         source.index("void CloseMetricSources()", load_library_hook_start)
     ]
-    assert "if (!g_taskbarViewDllLoaded &&" in load_library_hook
-    assert "g_taskbarViewHookAttempts < kMaximumTaskbarViewHookAttempts" in load_library_hook
+    assert "if (module && !g_taskbarViewHookAttempted)" in load_library_hook
+    assert "DWORD lastError = GetLastError();" in load_library_hook
+    assert "SetLastError(lastError);" in load_library_hook
 
     metrics_worker = source[
         source.index("void MetricsWorkerProc()") : source.index("bool StartMetricsWorker()")
@@ -706,9 +697,8 @@ def main() -> int:
     assert "break;" not in wait_failed
     assert "std::this_thread::sleep_for" in wait_failed
     assert "else if (waitResult == WAIT_OBJECT_0)" in metrics_worker
-    assert "ApplyTemperatureHoldover(snapshot->cpuTemp" in metrics_worker
-    assert "ApplyTemperatureHoldover(snapshot->gpuTemp" in metrics_worker
-    assert "kTemperatureHoldoverSamples = 2" in source
+    assert "ApplyTemperatureHoldover" not in source
+    assert "TemperatureHoldover" not in source
     assert "HWiNFO GPU temperature readings found" in source
 
     reuse_path = inject_widget[

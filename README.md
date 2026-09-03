@@ -69,11 +69,10 @@ or make internet requests.
 
 Metric collection runs on a worker thread. The taskbar UI thread only renders
 completed snapshots and catches up with every sample that arrived while the UI
-was busy, so the history traces keep their sampling interval. If a display-
-driver restart changes an adapter LUID or invalidates the active performance
-counters, the mod refreshes the live adapter list and rebuilds the counters
-automatically. This identity check also covers a successful but empty VRAM
-counter result and uses exponential backoff while a parked GPU remains idle.
+was busy, so the history traces keep their sampling interval. If a display
+driver restart assigns the adapter a new LUID, the mod detects it during the
+normal adapter refresh and rebuilds the GPU performance counters once. Hard
+counter failures use the same bounded recovery path and fixed cooldown.
 
 The adapter with the most dedicated VRAM is selected automatically. A partial
 adapter-name filter is available for multi-GPU systems. GPU usage and VRAM are
@@ -124,18 +123,18 @@ the same Windows user. The automatic sensor matcher prefers:
 - CPU: `CPU (Tctl/Tdie)`, `CPU Die (average)`, or `CPU Package`.
 - GPU: `GPU Temperature`.
 
-Partial HWiNFO sensor-name filters are available in the mod settings. With
-automatic GPU sensor selection, the HWiNFO sensor name must also match the
-selected Windows adapter, preventing a multi-GPU system from showing another
-card's temperature.
+Partial HWiNFO sensor-name filters are available in the mod settings. When
+Windows adapter identity is available, automatic GPU sensor selection also
+matches the HWiNFO sensor name to that adapter. If Windows adapter enumeration
+has never been available and no adapter filter is configured, HWiNFO falls back
+to its generic GPU-temperature match; on multi-GPU systems, set the adapter and
+sensor filters explicitly.
 
 If the selected source is unavailable, temperatures are shown as `--°C`; CPU,
 GPU, RAM, and VRAM monitoring continues to work. The active CPU and GPU
-providers are logged only when they change. A transient provider timeout keeps
-the last good temperature for at most two samples, avoiding a one-tick `--°C`
-flicker without hiding a provider that has actually disappeared. If automatic
-GPU matching finds temperature readings but none match the selected Windows
-adapter, the log explains that the sensor-name filter is the escape hatch.
+providers are logged only when they change. If automatic GPU matching finds
+temperature readings but none match the selected Windows adapter, the log
+explains that the sensor-name filter is the escape hatch.
 
 ## Setting up HWiNFO temperatures
 
@@ -251,9 +250,9 @@ to dedicated VRAM usage on a discrete card.
 | CPU or GPU temperature is `--°C` | Windows may not expose that sensor. Use Automatic mode, then configure HWiNFO Shared Memory or Gadget Registry. Confirm HWiNFO is running. |
 | HWiNFO worked and stopped after about 12 hours | The free HWiNFO64 Shared Memory period expired. Re-enable/restart it, configure Gadget Registry, use Windows-native fallback, or use HWiNFO64 Pro. |
 | GPU temperature belongs to another card | Set **GPU adapter filter** first. If needed, also set **GPU temperature sensor filter** to the matching HWiNFO sensor. |
-| VRAM is `--` after a driver update | The mod normally rebuilds its adapter and PDH state automatically. Give it several update intervals. If it remains unavailable, reload the mod or restart Explorer and inspect the Windhawk log. |
+| VRAM is `--` after a driver update | A changed adapter LUID triggers an automatic counter rebuild. Give it several update intervals. If it remains unavailable, reload the mod or restart Explorer and inspect the Windhawk log. |
 | Integrated-GPU memory looks unexpectedly large | Automatic mode shows the Windows shared-memory limit. Select **Dedicated VRAM** only if you intentionally want the small reserved carve-out. |
-| Discrete 512 MB GPU is shown as shared memory | Force **Dedicated VRAM** and report the exact adapter name/driver so automatic detection can be improved. |
+| Discrete 512 MB GPU is shown as shared memory | Force **Dedicated VRAM**. The automatic memory-shape signal cannot always distinguish a legacy low-memory discrete card from an integrated carve-out. |
 | Widget is missing or on the wrong taskbar | Verify **Taskbar monitor**, width and offset. Disconnecting a selected display temporarily moves the widget to the primary taskbar. Reload the mod after a major Explorer/taskbar update. |
 | Widget overlaps Start, Widgets or another mod | Adjust **Left offset**, enable **Reserve space**, or disable the taskbar element using the same area. |
 
