@@ -10,6 +10,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -79,7 +80,7 @@ struct D3DKMT_ADAPTERTYPE {
 
 constexpr UINT kHybridIntegratedAdapterFlag = 1u << 5;
 
-struct LiveAdapterInfo {
+struct GpuAdapterInfo {
     std::wstring description;
     LUID luid{};
     uint64_t dedicatedVideoMemory = 0;
@@ -95,7 +96,7 @@ using D3DKMTCloseAdapter_t =
     LONG(WINAPI*)(const D3DKMT_CLOSEADAPTER*);
 using D3DKMTEnumAdapters2_t = LONG(WINAPI*)(D3DKMT_ENUMADAPTERS2*);
 
-std::optional<LiveAdapterInfo> ReadLiveAdapter() {
+std::optional<GpuAdapterInfo> ReadLiveAdapter() {
     HMODULE gdi32 = LoadLibraryExW(L"gdi32.dll", nullptr,
                                    LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!gdi32) {
@@ -120,7 +121,7 @@ std::optional<LiveAdapterInfo> ReadLiveAdapter() {
         return std::nullopt;
     }
 
-    std::optional<LiveAdapterInfo> selected;
+    std::optional<GpuAdapterInfo> selected;
     ULONG adapterCount =
         std::min<ULONG>(enumeration.NumAdapters, std::size(adapters));
     for (ULONG index = 0; index < adapterCount; index++) {
@@ -139,7 +140,7 @@ std::optional<LiveAdapterInfo> ReadLiveAdapter() {
             adapters[index].hAdapter, 15, &adapterType, sizeof(adapterType)};
         bool adapterTypeAvailable = queryAdapter(&adapterTypeQuery) == 0;
 
-        LiveAdapterInfo candidate{
+        GpuAdapterInfo candidate{
             registryAvailable ? registryInfo.AdapterString : L"",
             adapters[index].AdapterLuid,
             segmentsAvailable ? segmentInfo.DedicatedVideoMemorySize : 0,
@@ -234,6 +235,10 @@ std::wstring ToLower(std::wstring value) {
     return value;
 }
 
+bool Contains(const std::wstring& text, const std::wstring& needle) {
+    return needle.empty() || text.find(needle) != std::wstring::npos;
+}
+
 std::wstring NormalizeAdapterIdentity(std::wstring value) {
     value = ToLower(std::move(value));
     for (wchar_t& character : value) {
@@ -265,7 +270,7 @@ std::wstring NormalizeAdapterIdentity(std::wstring value) {
         if (end == std::wstring::npos) {
             end = normalized.size();
         }
-        std::wstring token = normalized.substr(start, end - start);
+        std::wstring_view token(normalized.data() + start, end - start);
         if (token != L"r" && token != L"tm") {
             if (!filtered.empty()) {
                 filtered.push_back(L' ');
@@ -277,7 +282,29 @@ std::wstring NormalizeAdapterIdentity(std::wstring value) {
     return filtered;
 }
 
-bool LooksLikeIntegratedGpu(const LiveAdapterInfo& adapter) {
+std::vector<std::wstring> IdentityTokens(const std::wstring& value) {
+    std::vector<std::wstring> tokens;
+    size_t start = 0;
+    while (start < value.size()) {
+        size_t end = value.find(L' ', start);
+        if (end == std::wstring::npos) {
+            end = value.size();
+        }
+        if (end > start) {
+            tokens.emplace_back(value.substr(start, end - start));
+        }
+        start = end + 1;
+    }
+    return tokens;
+}
+
+bool HasDigit(const std::wstring& value) {
+    return std::any_of(value.begin(), value.end(), [](wchar_t character) {
+        return std::iswdigit(character) != 0;
+    });
+}
+
+bool LooksLikeIntegratedGpu(const GpuAdapterInfo& adapter) {
     if (adapter.integrated || adapter.dedicatedVideoMemory == 0) {
         return true;
     }
@@ -288,38 +315,36 @@ bool LooksLikeIntegratedGpu(const LiveAdapterInfo& adapter) {
     }
 
     std::wstring name = NormalizeAdapterIdentity(adapter.description);
-    bool radeonMobileModel = false;
-    if (name.find(L"radeon") != std::wstring::npos &&
-        name.find(L"radeon hd") == std::wstring::npos) {
-        size_t start = 0;
-        while (start < name.size()) {
-            size_t end = name.find(L' ', start);
-            if (end == std::wstring::npos) {
-                end = name.size();
-            }
-            std::wstring token = name.substr(start, end - start);
-            if (token.size() == 4 && token.back() == L'm' &&
-                std::all_of(token.begin(), token.end() - 1,
-                            [](wchar_t character) {
-                                return std::iswdigit(character) != 0;
-                            })) {
-                radeonMobileModel = true;
+    bool radeonIntegratedModel = false;
+    if (Contains(name, L"radeon") && !Contains(name, L"radeon hd")) {
+        auto tokens = IdentityTokens(name);
+        for (size_t i = 0; i < tokens.size(); i++) {
+            const std::wstring& token = tokens[i];
+            bool hasModelSuffix = token.size() > 1 &&
+                                  (token.back() == L'm' ||
+                                   token.back() == L's') &&
+                                  std::all_of(
+                                      token.begin(), token.end() - 1,
+                                      [](wchar_t character) {
+                                          return std::iswdigit(character) != 0;
+                                      });
+            bool followedByGraphics =
+                HasDigit(token) && i + 1 < tokens.size() &&
+                tokens[i + 1] == L"graphics";
+            if (hasModelSuffix || followedByGraphics) {
+                radeonIntegratedModel = true;
                 break;
             }
-            start = end + 1;
         }
     }
 
-    bool intelArc = name.find(L"intel") != std::wstring::npos &&
-                    name.find(L"arc") != std::wstring::npos;
-    return name.find(L"uhd graphics") != std::wstring::npos ||
-           (name.find(L"intel") != std::wstring::npos &&
-            name.find(L"hd graphics") != std::wstring::npos) ||
-           name.find(L"iris") != std::wstring::npos ||
-           name.find(L"radeon graphics") != std::wstring::npos ||
-           name.find(L"vega") != std::wstring::npos ||
-           name.find(L"integrated") != std::wstring::npos ||
-           radeonMobileModel || intelArc;
+    bool intelArc = Contains(name, L"intel") && Contains(name, L"arc");
+    return Contains(name, L"uhd graphics") ||
+           (Contains(name, L"intel") && Contains(name, L"hd graphics")) ||
+           Contains(name, L"iris") ||
+           Contains(name, L"radeon graphics") || Contains(name, L"vega") ||
+           Contains(name, L"integrated") ||
+           radeonIntegratedModel || intelArc;
 }
 
 bool ReadArray(PDH_HCOUNTER counter,
@@ -357,6 +382,8 @@ int wmain() {
                                  128 * kMiB, kSyntheticSharedMemory, false}) ||
         !LooksLikeIntegratedGpu({L"AMD Radeon 890M", {}, 512 * kMiB,
                                  kSyntheticSharedMemory, false}) ||
+        !LooksLikeIntegratedGpu({L"AMD Radeon(TM) 8060S Graphics", {},
+                                 512 * kMiB, kSyntheticSharedMemory, false}) ||
         LooksLikeIntegratedGpu({L"AMD Radeon HD 6450", {}, 512 * kMiB,
                                 kSyntheticSharedMemory, false}) ||
         LooksLikeIntegratedGpu({L"AMD Radeon HD 6470M", {}, 512 * kMiB,

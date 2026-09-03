@@ -23,6 +23,31 @@ def extract_block(source: str, name: str) -> str:
     return match.group(1)
 
 
+def extract_cpp_function(source: str, name: str) -> str:
+    match = re.search(rf"^.*\b{re.escape(name)}\s*\([^;]*$", source, re.MULTILINE)
+    if not match:
+        raise AssertionError(f"Missing C++ function: {name}")
+    start = match.start()
+    opening_brace = source.find("{", match.start())
+    if opening_brace < 0:
+        raise AssertionError(f"Missing body for C++ function: {name}")
+    depth = 0
+    for index in range(opening_brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : index + 1]
+    raise AssertionError(f"Unterminated C++ function: {name}")
+
+
+def canonical_cpp(value: str) -> str:
+    value = re.sub(r"/\*.*?\*/", "", value, flags=re.DOTALL)
+    value = re.sub(r"//.*", "", value)
+    return re.sub(r"\s+", "", value)
+
+
 def parse_metadata(source: str) -> dict[str, str]:
     match = re.search(
         r"// ==WindhawkMod==\s*(.*?)\s*// ==/WindhawkMod==",
@@ -217,16 +242,18 @@ def main() -> int:
     assert "std::optional<std::list<FrameworkElement::Loaded_revoker>>" in source
     assert "#elif defined(_M_ARM64)" in source
     assert "0xD503237F" in source
-    assert "SendMessageTimeoutW(" in source
-    assert "SMTO_ABORTIFHUNG | SMTO_BLOCK" in source
+    assert "SendMessageW(window, message" in source
+    assert "SendMessageTimeoutW(" not in source
     assert "std::shared_ptr<void> context" in source
     assert "g_windowThreadDispatchMutex" in source
     assert "g_windowThreadCallbackRegistry" in source
+    assert "std::optional<std::unordered_map<" in source
     assert "g_nextWindowThreadCallbackToken" in source
     assert "static_cast<LPARAM>(callbackToken)" in source
     assert "reinterpret_cast<LPARAM>(callbackContext)" not in source
-    assert "BOOL hookRemoved = UnhookWindowsHookEx(hook);" in source
-    assert "g_taskbarCallbackCleanupFailed = true;" in source
+    assert "while (true)" in source
+    assert "if (UnhookWindowsHookEx(hook))" in source
+    assert "ERROR_INVALID_HOOK_HANDLE" in source
     assert "size_t elementOffset = 0;" in source
     assert 'Wh_Log(L"Removing stale Taskbar System Info widget")' in source
     assert "HWiNFO_SENS_SM2" in source
@@ -247,6 +274,18 @@ def main() -> int:
     assert "kAdapterPerfDataQueryType = 62" in source
     assert "ReadWindowsGpuTemperature" in source
     assert 'value == L"windowsThermalZones"' not in source
+
+    for helper_name in (
+        "ToLower",
+        "Contains",
+        "NormalizeAdapterIdentity",
+        "IdentityTokens",
+        "HasDigit",
+        "LooksLikeIntegratedGpu",
+    ):
+        assert canonical_cpp(extract_cpp_function(source, helper_name)) == canonical_cpp(
+            extract_cpp_function(metrics_smoke, helper_name)
+        ), f"Smoke-test helper drifted from production: {helper_name}"
     assert "static_assert(offsetof(HwInfoHeader, pollTime) == 12);" in source
     assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
 
@@ -382,9 +421,10 @@ def main() -> int:
     assert "kMaximumIntegratedCarveout" in integrated_gpu_heuristic
     assert "adapter.sharedSystemMemory == 0" in integrated_gpu_heuristic
     assert 'Contains(name, L"iris")' in integrated_gpu_heuristic
-    assert "radeonMobileModel" in integrated_gpu_heuristic
+    assert "radeonIntegratedModel" in integrated_gpu_heuristic
     assert 'Contains(name, L"radeon hd")' in integrated_gpu_heuristic
-    assert "token.size() != 4" in integrated_gpu_heuristic
+    assert "token.back() == L's'" in integrated_gpu_heuristic
+    assert 'tokens[i + 1] == L"graphics"' in integrated_gpu_heuristic
     assert 'Contains(name, L"hd graphics")' in integrated_gpu_heuristic
     assert "bool intelArc" in integrated_gpu_heuristic
     assert 'Contains(name, L"intel") && Contains(name, L"arc")' in integrated_gpu_heuristic
@@ -511,6 +551,11 @@ def main() -> int:
     ]
     assert "g_timer.Stop()" not in remove_widget
     assert "UpdateTimerInterval();" in remove_widget
+    inject_widget = source[
+        source.index("bool InjectWidget(") :
+        source.index("using RunFromWindowThreadProc")
+    ]
+    assert "if (!RemoveWidget())" in inject_widget
     remove_taskbar = source[
         source.index("void RemoveFromCurrentTaskbar(") :
         source.index("void ResetPlacementRetryState(")
@@ -518,8 +563,13 @@ def main() -> int:
     assert "StopTimer()" in remove_taskbar
     assert "RemoveTaskbarUiContext" in remove_taskbar
     assert "context->succeeded = succeeded" in remove_taskbar
+    remove_for_move = source[
+        source.index("void RemoveWidgetForMove(") :
+        source.index("struct RemoveTaskbarUiContext")
+    ]
+    assert "context->succeeded = RemoveWidget();" in remove_for_move
     assert "g_lastMonitorCount" not in source
-    assert "PinModuleAfterFailedTaskbarTeardown" in source
+    assert "PinModuleAfterFailedTaskbarTeardown" not in source
     assert "kMaximumTeardownAttempts" in source
 
     placement_impl = source[
@@ -536,6 +586,8 @@ def main() -> int:
     ]
     assert "UpdateTimerInterval();" in apply_settings
     assert "g_timer.Interval(" not in apply_settings
+    assert "ThemeOpacityValues opacities" not in apply_settings
+    assert ".Opacity(opacities." not in apply_settings
 
     close_metric_sources = source[
         source.index("void CloseMetricSources()") :
@@ -551,6 +603,8 @@ def main() -> int:
     ]
     assert 'L"Registering taskbar Loaded handler failed' in constructor_hook
     assert "g_loadedRevokers->erase(revoker);" in constructor_hook
+    assert "g_taskbarThreadId = GetCurrentThreadId();" in constructor_hook
+    assert "g_taskbarUiResourcesRegistered = true;" in constructor_hook
 
     assert "g_placementApplyPending" in source
     assert "g_resetUnknownPlacementProbesPending" in source
@@ -558,11 +612,15 @@ def main() -> int:
     assert "placement remains pending" in source
     assert "StartPlacementRetryWorker()" in source
     assert "StopPlacementRetryWorker()" in source
+    assert "worker->join();" in source
+    assert "worker->detach();" not in source
     assert "kMaximumFastStartupRetryAttempts" in source
     assert "slowBackoff ? 30000 : 1000" in source
-    assert "g_taskbarCallbackCleanupFailed" in source
-    assert "g_modulePinnedAfterFailedTeardown" in source
-    assert "restart Explorer before enabling the mod again" in source
+    assert "g_taskbarCallbackCleanupFailed" not in source
+    assert "g_modulePinnedAfterFailedTeardown" not in source
+    assert "GET_MODULE_HANDLE_EX_FLAG_PIN" not in source
+    assert "g_taskbarUiResourcesRegistered" in source
+    assert "g_windowThreadCallbackRegistry.reset();" in source
     assert "attemptedThreadIds" in source
     assert "kGpuAdapterCacheStaleGrace" in source
     assert "kGpuAdapterStaleFailureLimit" in source
@@ -574,13 +632,14 @@ def main() -> int:
     assert "ApplyThemeOpacities(settings);" in source
     assert "settings.adaptiveColors && g_cachedHighContrast" in source
     assert "ResolveThemeOpacities" in source
-    assert "static_assert(ResolveThemeOpacities(true, 20).label == 1.0);" in source
-    assert "HistoryGapResetIsDeterministic" in source
-    assert "static_assert(HistoryGapResetIsDeterministic());" in source
+    assert "static_assert(ResolveThemeOpacities" not in source
+    assert "HistoryGapResetIsDeterministic" not in source
+    assert "HwInfoPartialRescanBackoffIsBounded" not in source
     assert "-Wno-unneeded-internal-declaration" not in build_script
     assert 'L"Intel(R) Arc(TM) 140V GPU"' in metrics_smoke
     assert 'L"Intel(R) HD Graphics 4000"' in metrics_smoke
     assert 'L"AMD Radeon 890M"' in metrics_smoke
+    assert 'L"AMD Radeon(TM) 8060S Graphics"' in metrics_smoke
     assert 'L"AMD Radeon HD 6450"' in metrics_smoke
     assert 'L"AMD Radeon HD 6470M"' in metrics_smoke
     assert "!LooksLikeIntegratedGpu(*liveAdapter)" in metrics_smoke
@@ -652,9 +711,6 @@ def main() -> int:
     assert "kTemperatureHoldoverSamples = 2" in source
     assert "HWiNFO GPU temperature readings found" in source
 
-    inject_widget = source[
-        source.index("bool InjectWidget(") : source.index("using RunFromWindowThreadProc")
-    ]
     reuse_path = inject_widget[
         inject_widget.index("if (g_widget &&") :
         inject_widget.index('Wh_Log(L"Removing stale Taskbar System Info widget")')
