@@ -22,6 +22,17 @@ $savedProcessPath = $env:Path
 try {
     $runtimeBin = Join-Path $compilerRoot 'x86_64-w64-mingw32\bin'
     $env:Path = "$runtimeBin;$(Join-Path $compilerRoot 'bin');$savedProcessPath"
+    & $output '--self-test'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Metrics status regression failed with exit code $LASTEXITCODE"
+    }
+    foreach ($fault in @('--inject-engine-error', '--inject-invalid-engine-data')) {
+        & $output $fault
+        if ($LASTEXITCODE -ne 5) {
+            throw "Metrics smoke must fail with exit code 5 for $fault, got $LASTEXITCODE"
+        }
+        Write-Output "PASS: $fault returned the expected failure code 5"
+    }
     & $output
     if ($LASTEXITCODE -ne 0) {
         throw "Metrics smoke-test failed with exit code $LASTEXITCODE"
