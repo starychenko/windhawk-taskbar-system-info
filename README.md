@@ -494,6 +494,12 @@ for the checks and remaining Explorer scenarios, and
 [the metrics review record](docs/review-resolution-2026-09-17.md) for provider
 behavior and tradeoffs. Automated checks do not replace live hardware tests.
 
+## Contributing and support
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development checks and pull requests,
+[SUPPORT.md](SUPPORT.md) for setup questions and bug reports, and
+[SECURITY.md](SECURITY.md) for reporting suspected vulnerabilities.
+
 ## Credits and license
 
 Taskbar discovery and thread dispatch follow
