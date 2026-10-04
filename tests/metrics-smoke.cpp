@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <dxgi.h>
@@ -314,7 +317,7 @@ bool LooksLikeIntegratedGpu(const GpuAdapterInfo& adapter) {
            adapter.sharedSystemMemory > adapter.dedicatedVideoMemory;
 }
 
-bool ReadArray(PDH_HCOUNTER counter,
+PDH_STATUS ReadArray(PDH_HCOUNTER counter,
                std::vector<unsigned char>& buffer,
                DWORD& count) {
     constexpr int kMaxAttempts = 4;
@@ -328,19 +331,99 @@ bool ReadArray(PDH_HCOUNTER counter,
         PDH_STATUS status = PdhGetFormattedCounterArrayW(
             counter, PDH_FMT_DOUBLE, &size, &count, items);
         if (status == ERROR_SUCCESS) {
-            return true;
+            return status;
         }
         if (status != static_cast<PDH_STATUS>(PDH_MORE_DATA) || !size) {
-            return false;
+            return status;
         }
         buffer.resize(size);
     }
-    return false;
+    return static_cast<PDH_STATUS>(PDH_MORE_DATA);
+}
+
+bool ValidCounterValue(const PDH_FMT_COUNTERVALUE& value) {
+    return (value.CStatus == PDH_CSTATUS_VALID_DATA || value.CStatus == PDH_CSTATUS_NEW_DATA) &&
+           std::isfinite(value.doubleValue) && value.doubleValue >= 0;
+}
+
+std::optional<double> GpuMemory(PDH_STATUS status,
+                                const PDH_FMT_COUNTERVALUE_ITEM_W* items,
+                                DWORD count, const std::wstring& luid) {
+    if (status != ERROR_SUCCESS) return std::nullopt;
+    double bytes = 0;
+    bool found = false;
+    for (DWORD i = 0; i < count; ++i) {
+        auto name = items[i].szName ? ToLower(items[i].szName) : L"";
+        if (name.find(luid) == std::wstring::npos || !ValidCounterValue(items[i].FmtValue)) continue;
+        bytes += items[i].FmtValue.doubleValue; found = true;
+    }
+    return found && std::isfinite(bytes) ? std::optional(bytes) : std::nullopt;
+}
+
+std::optional<double> GpuUsage(PDH_STATUS status,
+                               const PDH_FMT_COUNTERVALUE_ITEM_W* items,
+                               DWORD count, const std::wstring& luid,
+                               bool memoryAvailable) {
+    if (status != ERROR_SUCCESS && status != static_cast<PDH_STATUS>(PDH_NO_DATA) &&
+        status != static_cast<PDH_STATUS>(PDH_CSTATUS_NO_INSTANCE)) return std::nullopt;
+    std::unordered_map<std::wstring, double> engines;
+    bool matched = false;
+    if (status == ERROR_SUCCESS) for (DWORD i = 0; i < count; ++i) {
+        auto name = items[i].szName ? ToLower(items[i].szName) : L"";
+        if (name.find(luid) == std::wstring::npos) continue;
+        matched = true;
+        if (!ValidCounterValue(items[i].FmtValue)) continue;
+        auto start = name.find(L"luid_");
+        engines[start == std::wstring::npos ? name : name.substr(start)] += items[i].FmtValue.doubleValue;
+    }
+    if (engines.empty()) return !matched && memoryAvailable ? std::optional(0.0) : std::nullopt;
+    double usage = 0;
+    for (const auto& [engine, value] : engines) {
+        if (!std::isfinite(value)) return std::nullopt;
+        usage = std::max(usage, value);
+    }
+    return std::clamp(usage, 0.0, 100.0);
+}
+
+bool MetricValidationChecks() {
+    const std::wstring luid = L"luid_0x00000000_0x00000042";
+    wchar_t engine[] = L"pid_1_luid_0x00000000_0x00000042_phys_0_eng_0";
+    PDH_FMT_COUNTERVALUE_ITEM_W item{};
+    item.szName = engine; item.FmtValue.CStatus = PDH_CSTATUS_VALID_DATA; item.FmtValue.doubleValue = 42;
+    if (GpuUsage(ERROR_SUCCESS, &item, 1, luid, true) != 42 ||
+        GpuMemory(ERROR_SUCCESS, &item, 1, luid) != 42 ||
+        GpuUsage(PDH_INVALID_HANDLE, nullptr, 0, luid, true) ||
+        GpuUsage(PDH_MORE_DATA, nullptr, 0, luid, true) ||
+        GpuUsage(PDH_NO_DATA, nullptr, 0, luid, true) != 0 ||
+        GpuUsage(PDH_CSTATUS_NO_INSTANCE, nullptr, 0, luid, true) != 0 ||
+        GpuUsage(ERROR_SUCCESS, nullptr, 0, luid, true) != 0 ||
+        GpuUsage(PDH_NO_DATA, nullptr, 0, luid, false)) return false;
+    item.FmtValue.CStatus = PDH_CSTATUS_INVALID_DATA;
+    if (GpuUsage(ERROR_SUCCESS, &item, 1, luid, true) || GpuMemory(ERROR_SUCCESS, &item, 1, luid)) return false;
+    item.FmtValue.CStatus = PDH_CSTATUS_NEW_DATA; item.FmtValue.doubleValue = NAN;
+    if (GpuUsage(ERROR_SUCCESS, &item, 1, luid, true) || GpuMemory(ERROR_SUCCESS, &item, 1, luid)) return false;
+    item.FmtValue.doubleValue = -1;
+    if (GpuUsage(ERROR_SUCCESS, &item, 1, luid, true) || GpuMemory(ERROR_SUCCESS, &item, 1, luid)) return false;
+    item.FmtValue.doubleValue = 0;
+    return GpuUsage(ERROR_SUCCESS, &item, 1, luid, true) == 0 &&
+           GpuMemory(ERROR_SUCCESS, &item, 1, luid) == 0 &&
+           !GpuMemory(PDH_INVALID_HANDLE, &item, 1, luid);
 }
 
 }  // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t** argv) {
+    if (!MetricValidationChecks()) {
+        std::wcerr << L"Metric status/CStatus regression checks failed\n";
+        return 8;
+    }
+    if (argc == 2 && std::wstring_view(argv[1]) == L"--self-test") {
+        std::wcout << L"PASS: GPU hard errors, soft absence, invalid CStatus, NaN and real idle zero\n";
+        return 0;
+    }
+    std::wstring_view fault = argc == 2 ? argv[1] : L"";
+    if (argc > 2 || (argc == 2 && fault != L"--inject-engine-error" &&
+                     fault != L"--inject-invalid-engine-data")) return 2;
     constexpr uint64_t kMiB = 1024ull * 1024;
     constexpr uint64_t kSyntheticSharedMemory = 8ull * 1024 * 1024 * 1024;
     if (!LooksLikeIntegratedGpu({L"Intel(R) Arc(TM) 140V GPU", {},
@@ -467,7 +550,7 @@ int wmain() {
         DWORD firstCount = 0;
         bool firstMemoryFound = false;
         bool shared = LooksLikeIntegratedGpu(*liveAdapter);
-        if (ReadArray(shared ? sharedVramCounter : vramCounter, firstBuffer, firstCount)) {
+        if (ReadArray(shared ? sharedVramCounter : vramCounter, firstBuffer, firstCount) == ERROR_SUCCESS) {
             auto* firstItems = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(firstBuffer.data());
             for (DWORD i = 0; i < firstCount; ++i) {
                 const auto& item = firstItems[i];
@@ -504,55 +587,41 @@ int wmain() {
 
     std::vector<unsigned char> buffer;
     DWORD count = 0;
-    std::unordered_map<std::wstring, double> engines;
-    if (ReadArray(gpuCounter, buffer, count)) {
-        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
-            buffer.data());
-        for (DWORD i = 0; i < count; i++) {
-            std::wstring instance =
-                items[i].szName ? ToLower(items[i].szName) : L"";
-            double value = items[i].FmtValue.doubleValue;
-            if (instance.find(luid) == std::wstring::npos ||
-                !std::isfinite(value) || value < 0.0) {
-                continue;
-            }
-            size_t luidPosition = instance.find(L"luid_");
-            std::wstring key = luidPosition == std::wstring::npos
-                                   ? instance
-                                   : instance.substr(luidPosition);
-            engines[key] += value;
-        }
+    std::vector<unsigned char> gpuBuffer;
+    DWORD gpuCount = 0;
+    auto gpuStatus = ReadArray(gpuCounter, gpuBuffer, gpuCount);
+    // Exercise the same failure/exit path as the live run, without changing
+    // the system counters. Fault injection exists only in this smoke program.
+    std::wstring injectedName = L"pid_1_" + luid + L"_phys_0_eng_0";
+    if (fault == L"--inject-engine-error") gpuStatus = static_cast<PDH_STATUS>(PDH_INVALID_HANDLE);
+    if (fault == L"--inject-invalid-engine-data") {
+        gpuBuffer.resize(sizeof(PDH_FMT_COUNTERVALUE_ITEM_W));
+        auto* item = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(gpuBuffer.data());
+        *item = {}; item->szName = injectedName.data();
+        item->FmtValue.CStatus = PDH_CSTATUS_INVALID_DATA;
+        item->FmtValue.doubleValue = 42;
+        gpuCount = 1; gpuStatus = ERROR_SUCCESS;
     }
-
-    double gpuUsage = 0.0;
-    for (const auto& [engine, value] : engines) {
-        gpuUsage = std::max(gpuUsage, value);
-    }
-    gpuUsage = std::clamp(gpuUsage, 0.0, 100.0);
 
     buffer.clear();
     count = 0;
-    double vramBytes = 0.0;
-    bool vramFound = false;
     bool useDedicatedMemory =
         !LooksLikeIntegratedGpu(*liveAdapter) &&
         selected.DedicatedVideoMemory > 0;
     PDH_HCOUNTER selectedMemoryCounter =
         useDedicatedMemory ? vramCounter : sharedVramCounter;
-    if (ReadArray(selectedMemoryCounter, buffer, count)) {
-        auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
-            buffer.data());
-        for (DWORD i = 0; i < count; i++) {
-            std::wstring instance =
-                items[i].szName ? ToLower(items[i].szName) : L"";
-            double value = items[i].FmtValue.doubleValue;
-            if (instance.find(luid) == std::wstring::npos ||
-                !std::isfinite(value) || value < 0.0) {
-                continue;
-            }
-            vramBytes += value;
-            vramFound = true;
-        }
+    auto memoryStatus = ReadArray(selectedMemoryCounter, buffer, count);
+    auto vramBytes = GpuMemory(memoryStatus,
+        reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data()), count, luid);
+    auto gpuUsage = GpuUsage(gpuStatus,
+        reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(gpuBuffer.data()), gpuCount, luid, vramBytes.has_value());
+    if (!gpuUsage || !vramBytes) {
+        std::wcerr << L"GPU metrics unavailable: engine_status=0x" << std::hex
+                   << static_cast<unsigned long>(gpuStatus) << L" memory_status=0x"
+                   << static_cast<unsigned long>(memoryStatus) << std::dec
+                   << L" (matching values must have valid CStatus)\n";
+        PdhCloseQuery(query);
+        return 5;
     }
 
     buffer.clear();
@@ -560,7 +629,7 @@ int wmain() {
     double thermalSumCelsius = 0.0;
     double thermalHottestCelsius = 0.0;
     size_t thermalCount = 0;
-    if (ReadArray(thermalCounter, buffer, count)) {
+    if (ReadArray(thermalCounter, buffer, count) == ERROR_SUCCESS) {
         auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(
             buffer.data());
         for (DWORD i = 0; i < count; i++) {
@@ -586,7 +655,7 @@ int wmain() {
                               ? selected.DedicatedVideoMemory
                               : selected.SharedSystemMemory;
     double totalGb = static_cast<double>(totalBytes) / kGiB;
-    double usedGb = vramBytes / kGiB;
+    double usedGb = *vramBytes / kGiB;
     double percent = totalGb > 0.0 ? usedGb / totalGb * 100.0 : 0.0;
     auto gpuTemperature = ReadGpuTemperature(selected.AdapterLuid);
 
@@ -600,7 +669,7 @@ int wmain() {
     std::wcout << L"GPU=" << selected.Description << L"\n"
                << L"LUID_D3DKMT=" << luid << L"\n"
                << L"GPU_INTEGRATED=" << liveAdapter->integrated << L"\n"
-               << L"GPU_USAGE=" << gpuUsage << L"%\n"
+               << L"GPU_USAGE=" << *gpuUsage << L"%\n"
                << L"GPU_MEMORY=" << usedGb << L"/" << totalGb << L" GiB ("
                << (useDedicatedMemory ? L"dedicated, " : L"shared, ")
                << percent << L"%)\n";
@@ -620,7 +689,7 @@ int wmain() {
                    << L"\n";
     }
 
-    if (!vramFound || gpuUsage < 0.0 || gpuUsage > 100.0 || usedGb < 0.0 ||
+    if (*gpuUsage < 0.0 || *gpuUsage > 100.0 || usedGb < 0.0 ||
         usedGb > totalGb * 1.25 ||
         (gpuTemperature && (*gpuTemperature < 0.0 || *gpuTemperature > 200.0))) {
         std::wcerr << L"Metric validation failed\n";

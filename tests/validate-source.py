@@ -3,13 +3,16 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-
+from typing import TypeAlias
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PATH = ROOT / "taskbar-system-info.wh.cpp"
 README_PATH = ROOT / "README.md"
 BUILD_PATH = ROOT / "build.ps1"
 METRICS_SMOKE_PATH = ROOT / "tests" / "metrics-smoke.cpp"
+
+SettingValue: TypeAlias = str | int | bool | list[dict[str, str]]
+Setting: TypeAlias = dict[str, SettingValue]
 
 
 def extract_block(source: str, name: str) -> str:
@@ -76,14 +79,14 @@ def parse_scalar(value: str) -> str | int | bool:
     return value
 
 
-def parse_settings(block: str) -> list[dict[str, object]]:
+def parse_settings(block: str) -> list[Setting]:
     """Parse the deliberately small YAML subset used by Windhawk settings.
 
     Keeping this validator dependency-free is useful on a fresh Windows system,
     where the bundled Python doesn't necessarily include PyYAML.
     """
-    settings: list[dict[str, object]] = []
-    current: dict[str, object] | None = None
+    settings: list[Setting] = []
+    current: Setting | None = None
     current_options: list[dict[str, str]] | None = None
 
     for line_number, raw_line in enumerate(block.splitlines(), 1):
@@ -132,13 +135,22 @@ def parse_settings(block: str) -> list[dict[str, object]]:
 def main() -> int:
     source = SOURCE_PATH.read_text(encoding="utf-8")
     repository_readme = README_PATH.read_text(encoding="utf-8")
+    embedded_readme = extract_block(source, "WindhawkModReadme")
+    for heading, following in [
+        ("## Moving and saved positions", "## Placement and spacing"),
+        ("## Placement and spacing", "## Metrics and alerts"),
+    ]:
+        assert (
+            embedded_readme.split(heading, 1)[1].split(following, 1)[0]
+            == repository_readme.split(heading, 1)[1].split(following, 1)[0]
+        ), f"Embedded and repository README differ: {heading}"
     build_script = BUILD_PATH.read_text(encoding="utf-8")
     metrics_smoke = METRICS_SMOKE_PATH.read_text(encoding="utf-8")
     metadata = parse_metadata(source)
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.6.0",
+        "version": "1.7.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -288,7 +300,7 @@ def main() -> int:
     assert "static_assert(offsetof(HwInfoReadingPrefix, value) == 284);" in source
 
     temperature_dispatch = source[
-        source.index("void ReadTemperatures(") : source.index("uint64_t FileTimeValue(")
+        source.index("void ReadTemperatures(") : source.index("uint64_t FileTimeValue(", source.index("void ReadTemperatures("))
     ]
     assert "case TemperatureSource::HwInfoAuto:" in temperature_dispatch
     assert "ResolveGpuTemperatureAdapterName(settings)" in temperature_dispatch
@@ -658,7 +670,8 @@ def main() -> int:
     assert "ApplyHistorySample(g_cpuHistory" in update_widget
     assert "ApplyHistorySample(g_gpuHistory" in update_widget
     assert "CollectMetrics(" not in update_widget, "Metrics must stay off the UI thread"
-    assert "if (!force && !hasNewSample)" in update_widget
+    assert "MetricsSnapshotIsFresh(snapshot, settings, now)" in update_widget
+    assert "if (!force && !hasNewSample && fresh)" in update_widget
     assert "GetMetricsSince(" in update_widget
     assert "for (const MetricsSnapshot& newSnapshot : newSnapshots)" in update_widget
     assert "UpdateTimerInterval();" in update_widget
@@ -725,6 +738,7 @@ def main() -> int:
     assert "PostTaskbarRefresh();" in extract_cpp_function(source, "PublishMetrics")
     assert "PathGeometry" in source and "BuildSparklineRuns" in source
     assert "snapshot.capturedAt" in source and "AdvanceSampleDeadline" in source
+    assert "[[clang::no_destroy]] std::shared_ptr<MoveEditorState> g_moveEditor;" in source
     assert "g_rootGrid.SizeChanged(g_rootSizeChangedToken)" in remove_widget
     assert "g_widgetHost = nullptr" in remove_widget
     assert "-lcomctl32" in build_script

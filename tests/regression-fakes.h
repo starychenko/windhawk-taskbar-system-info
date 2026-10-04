@@ -25,16 +25,28 @@ inline bool memoryAvailable = true;
 inline bool enginesAvailable = true;
 inline bool hardArrays = false;
 inline bool invalidEngine = false;
+inline Query* invalidEngineQuery = nullptr;
 inline int growArrayAttempts = 0;
 inline int opens = 0;
 inline std::wstring instance = L"luid_0x00000000_0x00000042_phys_0";
 inline std::vector<BYTE> mapping;
 inline size_t mappingOffset = 0;
 inline bool mutexTimeout = false;
+inline bool mutexAvailable = true;
 inline const HANDLE mappingHandle = reinterpret_cast<HANDLE>(10001);
 inline const HANDLE mutexHandle = reinterpret_cast<HANDLE>(10002);
 inline const HKEY registryKey = reinterpret_cast<HKEY>(10003);
 inline std::map<std::wstring, std::wstring> registry;
+inline HKEY nativeRegistrySource = nullptr;
+inline bool registryInfoFails = false;
+inline bool registryChangesDuringRead = false;
+inline size_t registryValueReads = 0;
+inline uint64_t registryWriteTime = 0;
+inline void TouchRegistry() {
+    FILETIME now{}; GetSystemTimeAsFileTime(&now);
+    uint64_t ticks = (uint64_t{now.dwHighDateTime} << 32) | now.dwLowDateTime;
+    registryWriteTime = std::max(ticks, registryWriteTime + 1);
+}
 
 inline PDH_STATUS OpenQuery(PCWSTR, DWORD_PTR, PDH_HQUERY* result) {
     queries.push_back(std::make_unique<Query>());
@@ -86,7 +98,8 @@ inline PDH_STATUS Array(PDH_HCOUNTER handle, DWORD, LPDWORD bytes,
     }
     values[0].szName = const_cast<PWSTR>(instance.c_str());
     values[0].FmtValue.CStatus = PDH_CSTATUS_VALID_DATA;
-    if (engine && invalidEngine) values[0].FmtValue.CStatus = PDH_CSTATUS_INVALID_DATA;
+    if (engine && (invalidEngine || counter.query == invalidEngineQuery))
+        values[0].FmtValue.CStatus = PDH_CSTATUS_INVALID_DATA;
     values[0].FmtValue.doubleValue = thermal ? 323.15 : engine ? 14.0 : 268435456.0;
     *bytes = required; *count = 1;
     return ERROR_SUCCESS;
@@ -94,7 +107,7 @@ inline PDH_STATUS Array(PDH_HCOUNTER handle, DWORD, LPDWORD bytes,
 inline HANDLE OpenMapping(DWORD, BOOL, LPCWSTR) {
     return mapping.empty() ? nullptr : mappingHandle;
 }
-inline HANDLE OpenMutex(DWORD, BOOL, LPCWSTR) { return mutexHandle; }
+inline HANDLE OpenMutex(DWORD, BOOL, LPCWSTR) { return mutexAvailable ? mutexHandle : nullptr; }
 inline DWORD Wait(HANDLE handle, DWORD timeout) {
     return handle == mutexHandle ? (mutexTimeout ? WAIT_TIMEOUT : WAIT_OBJECT_0)
                                  : WaitForSingleObject(handle, timeout);
@@ -116,13 +129,25 @@ inline BOOL Release(HANDLE) { return TRUE; }
 inline BOOL CloseHandleChecked(HANDLE handle) {
     return handle == mappingHandle || handle == mutexHandle ? TRUE : CloseHandle(handle);
 }
-inline LSTATUS OpenRegistry(HKEY, LPCWSTR, DWORD, REGSAM, PHKEY key) {
+inline LSTATUS OpenRegistry(HKEY, LPCWSTR, DWORD, REGSAM access, PHKEY key) {
+    if (nativeRegistrySource) return RegOpenKeyExW(nativeRegistrySource, L"", 0, access, key);
     *key = registryKey;
     return ERROR_SUCCESS;
 }
-inline LSTATUS CloseRegistry(HKEY) { return ERROR_SUCCESS; }
-inline LSTATUS EnumRegistry(HKEY, DWORD index, LPWSTR name, LPDWORD length,
-                             LPDWORD, LPDWORD, LPBYTE, LPDWORD) {
+inline LSTATUS CloseRegistry(HKEY key) { return key == registryKey ? ERROR_SUCCESS : RegCloseKey(key); }
+inline LSTATUS RegistryInfo(HKEY key, LPWSTR cls, LPDWORD clsLength, LPDWORD reserved,
+                           LPDWORD subkeys, LPDWORD maxSubkey, LPDWORD maxClass,
+                           LPDWORD values, LPDWORD maxName, LPDWORD maxValue,
+                           LPDWORD security, PFILETIME lastWrite) {
+    if (key != registryKey) return RegQueryInfoKeyW(key, cls, clsLength, reserved,
+        subkeys, maxSubkey, maxClass, values, maxName, maxValue, security, lastWrite);
+    if (registryInfoFails) return ERROR_ACCESS_DENIED;
+    *lastWrite = {static_cast<DWORD>(registryWriteTime), static_cast<DWORD>(registryWriteTime >> 32)};
+    return ERROR_SUCCESS;
+}
+inline LSTATUS EnumRegistry(HKEY key, DWORD index, LPWSTR name, LPDWORD length,
+                             LPDWORD reserved, LPDWORD type, LPBYTE data, LPDWORD bytes) {
+    if (key != registryKey) return RegEnumValueW(key, index, name, length, reserved, type, data, bytes);
     if (index >= registry.size()) return ERROR_NO_MORE_ITEMS;
     auto it = registry.begin();
     std::advance(it, index);
@@ -133,8 +158,11 @@ inline LSTATUS EnumRegistry(HKEY, DWORD index, LPWSTR name, LPDWORD length,
     *length = required;
     return ERROR_SUCCESS;
 }
-inline LSTATUS RegistryValue(HKEY, LPCWSTR name, LPDWORD, LPDWORD type,
+inline LSTATUS RegistryValue(HKEY key, LPCWSTR name, LPDWORD reserved, LPDWORD type,
                                 LPBYTE buffer, LPDWORD bytes) {
+    if (key != registryKey) return RegQueryValueExW(key, name, reserved, type, buffer, bytes);
+    ++registryValueReads;
+    if (registryChangesDuringRead) TouchRegistry();
     auto it = registry.find(name);
     if (it == registry.end()) return ERROR_FILE_NOT_FOUND;
     *type = REG_SZ;
@@ -180,6 +208,7 @@ inline BOOL SetLocalString(PCWSTR key, PCWSTR value) {
 #define RegOpenKeyExW fake::OpenRegistry
 #define RegCloseKey fake::CloseRegistry
 #define RegQueryValueExW fake::RegistryValue
+#define RegQueryInfoKeyW fake::RegistryInfo
 #define RegEnumValueW fake::EnumRegistry
 
 #define Wh_GetStringValue fake::GetLocalString
