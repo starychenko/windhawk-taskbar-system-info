@@ -150,7 +150,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.7.0",
+        "version": "1.7.1",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -166,6 +166,7 @@ def main() -> int:
 
     settings = parse_settings(extract_block(source, "WindhawkModSettings"))
     assert len(settings) == 29, f"Expected 29 settings, got {len(settings)}"
+    assert next(item for item in settings if "moveHotkey" in item)["moveHotkey"] == ""
 
     setting_keys: set[str] = set()
     for index, item in enumerate(settings):

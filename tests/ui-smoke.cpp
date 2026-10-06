@@ -9,8 +9,13 @@ std::map<std::wstring, std::wstring> values;
 BOOL Set(PCWSTR key, PCWSTR value) { values[key] = value; return TRUE; }
 }
 #define Wh_SetStringValue uiStorage::Set
+#define ShowWindow uiStorage::KeepHidden
+namespace uiStorage {
+BOOL KeepHidden(HWND, int) { return FALSE; }
+}
 #include "../taskbar-system-info.wh.cpp"
 #undef Wh_SetStringValue
+#undef ShowWindow
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.Graphics.Imaging.h>
@@ -95,7 +100,12 @@ void SaveNativePreview(HWND window, const std::wstring& folderPath, PCWSTR name)
     HGDIOBJ old = SelectObject(dc, bitmap);
     HBRUSH backdrop = CreateSolidBrush(g_moveEditor->visual.light ? RGB(225, 233, 245) : RGB(17, 28, 50));
     FillRect(dc, &rect, backdrop); DeleteObject(backdrop);
-    SendMessageW(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), PRF_CLIENT);
+    auto layout = CurrentMovePreviewLayout(*g_moveEditor);
+    if (!PaintMovePreviewSurface(*g_moveEditor, layout)) throw std::runtime_error("Preview render failed");
+    auto& surface = *g_moveEditor->surface;
+    Gdiplus::Bitmap native(surface.width, surface.height, surface.width * 4,
+                          PixelFormat32bppPARGB, reinterpret_cast<BYTE*>(surface.pixels));
+    { Gdiplus::Graphics graphics(dc); graphics.DrawImage(&native, 0, 0); }
     std::vector<uint8_t> copy(static_cast<uint8_t*>(pixels),
                               static_cast<uint8_t*>(pixels) + rect.right * rect.bottom * 4);
     SelectObject(dc, old); DeleteObject(bitmap); DeleteDC(dc);
@@ -117,6 +127,22 @@ int wmain(int argc, wchar_t** argv) {
     int result = 0;
     try {
         manager = Windows::UI::Xaml::Hosting::WindowsXamlManager::InitializeForCurrentThread();
+        TaskbarProjection missingRoot;
+        ProbeTaskbarFrameGeometry(missingRoot, Grid{});
+        if (missingRoot.geometry.ready)
+            throw std::runtime_error("A taskbar frame without RootGrid must remain unavailable");
+        Grid detachedFrame, detachedRoot;
+        detachedRoot.Name(L"RootGrid");
+        detachedFrame.Width(1920); detachedFrame.Height(48);
+        detachedFrame.Children().Append(detachedRoot);
+        detachedFrame.Measure(Size{1920, 48});
+        detachedFrame.Arrange(Rect{0, 0, 1920, 48});
+        if (!MeasureTaskbarGeometry(detachedRoot, nullptr, 0).ready)
+            throw std::runtime_error("Detached-root fixture must expose measurable bounds");
+        TaskbarProjection detached;
+        ProbeTaskbarFrameGeometry(detached, detachedFrame);
+        if (detached.geometry.ready)
+            throw std::runtime_error("Measurable bounds without XamlRoot are not a ready screen projection");
         WNDCLASSW cls{};
         cls.lpfnWndProc = DefWindowProcW;
         cls.hInstance = GetModuleHandleW(nullptr);
@@ -237,13 +263,37 @@ int wmain(int argc, wchar_t** argv) {
                     maximum.ramUsedGb = maximum.ramTotalGb = 1024;
                     maximum.vramUsedGb = maximum.vramTotalGb = 96;
                     PublishMetrics(maximum); UpdateWidgetText(true); frame.UpdateLayout(); Pump();
-                    auto applies = g_layoutApplyCount;
+                    auto applies = g_widgetVisualRevision;
                     for (int i = 0; i < 5; ++i) { ApplyTaskbarPlacement(*settings); frame.UpdateLayout(); Pump(); }
-                    if (g_layoutApplyCount != applies || settings->width != 410 || settings->leftOffset != 6)
+                    if (g_widgetVisualRevision != applies || settings->width != 410 || settings->leftOffset != 6)
                         throw std::runtime_error("Stable geometry reapplied its layout or rewrote user preferences");
                     ++adaptiveCases;
                     if (g_widgetHost.Visibility() == Visibility::Collapsed) continue;
                     const auto layout = *g_widgetLayout;
+                    // Check real arranged XAML rows, not just the solver's
+                    // abstract cells. Missing grid columns can otherwise clip
+                    // RAM/VRAM while every calculated bound still fits.
+                    // XAML rounds arranged grid tracks to device pixels.
+                    constexpr double rowRoundingTolerance = 1.01;
+                    for (size_t group = 0; group < g_metricRows.size(); ++group) {
+                        auto row = g_metricRows[group];
+                        auto bounds = row.TransformToVisual(g_widget).TransformBounds(
+                            {0, 0, static_cast<float>(row.ActualWidth()),
+                             static_cast<float>(row.ActualHeight())});
+                        if (std::abs(row.ActualWidth() - layout.groups[group]) > rowRoundingTolerance ||
+                            bounds.X < kWidgetSidePadding - rowRoundingTolerance || bounds.Y < -rowRoundingTolerance ||
+                            bounds.X + bounds.Width > layout.width - kWidgetSidePadding + rowRoundingTolerance ||
+                            bounds.Y + bounds.Height > layout.height + rowRoundingTolerance) {
+                            std::wcerr << L"ROW group=" << group << L" font=" << fontSize
+                                << L" gap=" << gap << L" height=" << height
+                                << L" mode=" << static_cast<int>(layout.mode)
+                                << L" actual=" << bounds.X << L"," << bounds.Y << L","
+                                << bounds.Width << L"," << bounds.Height
+                                << L" expected-width=" << layout.groups[group]
+                                << L" layout=" << layout.width << L"," << layout.height << L"\n";
+                            throw std::runtime_error("Arranged XAML metric row is clipped or has the wrong width");
+                        }
+                    }
                     auto hostBounds = g_widgetHost.TransformToVisual(root).TransformBounds(
                         {0, 0, static_cast<float>(g_widgetHost.ActualWidth()), static_cast<float>(g_widgetHost.ActualHeight())});
                     if (layout.scale * fontSize < 9 - 1e-6 || hostBounds.X < 5.9 ||
@@ -350,9 +400,9 @@ int wmain(int argc, wchar_t** argv) {
             if (!SameWidgetLayout(preview.widget, *g_widgetLayout) || !PaintMovePreviewSurface(editor, preview))
                 throw std::runtime_error("Wide compact preview differs from the measured XAML widget");
             SaveImage(frame, argv[1], L"compact-verdana9-width330.png");
-            auto before = g_layoutApplyCount;
+            auto before = g_widgetVisualRevision;
             ApplyTaskbarPlacement(*wideCompact); frame.UpdateLayout(); Pump();
-            if (before != g_layoutApplyCount) throw std::runtime_error("Wide compact layout repeatedly rebuilds its geometry");
+            if (before != g_widgetVisualRevision) throw std::runtime_error("Wide compact layout repeatedly rebuilds its geometry");
             frame.Width(342); root.Width(342);
             frame.Measure(Size{342, 20}); frame.Arrange(Rect{0, 0, 342, 20}); frame.UpdateLayout(); Pump();
             if (g_widgetHost.Visibility() != Visibility::Collapsed)
@@ -381,9 +431,9 @@ int wmain(int argc, wchar_t** argv) {
             auto nativeLayout = ResolveMovePreviewLayout(editor, {0, 0, 2000, 2000});
             if (!SameWidgetLayout(nativeLayout.widget, *g_widgetLayout) || !PaintMovePreviewSurface(editor, nativeLayout))
                 throw std::runtime_error("Alternate font preview diverged from XAML");
-            auto before = g_layoutApplyCount;
+            auto before = g_widgetVisualRevision;
             ApplyTaskbarPlacement(*alternate); frame.UpdateLayout(); Pump();
-            if (g_layoutApplyCount != before || measured.widths != MeasureWidgetFont(*alternate).widths)
+            if (g_widgetVisualRevision != before || measured.widths != MeasureWidgetFont(*alternate).widths)
                 throw std::runtime_error("Font measurement cache is unstable");
         }
         // Capture a compact source, then reflow its logical snapshot into
@@ -615,7 +665,7 @@ int wmain(int argc, wchar_t** argv) {
                     throw std::runtime_error("Narrow free gap must preserve essential values with the compact layout");
             }
             std::wcout << L"LAYOUT " << width << L" root=" << root.ActualWidth()
-                       << L" available=" << TaskbarAvailableWidth()
+                       << L" available=" << available
                        << L" buttons=" << buttons.ActualWidth()
                        << L" desired=" << buttons.DesiredSize().Width
                        << L" margin=" << buttons.Margin().Left
@@ -712,16 +762,16 @@ int wmain(int argc, wchar_t** argv) {
              hostPoint.X + g_widgetHost.Width() > searchPoint.X + .1))
             throw std::runtime_error("Transformed search control was not avoided");
         SaveImage(frame, argv[1], L"mapped-search.png");
-        size_t cachedRebuilds = g_geometryCache.rebuilds;
+        auto cachedElements = g_geometryCache->elements.data();
         for (int i = 0; i < 10; ++i) {
             g_cpuUsageText.Text(i % 2 ? L"25%" : L"26%");
             frame.UpdateLayout(); Pump(); ApplyTaskbarPlacement(*settings);
         }
-        if (g_geometryCache.rebuilds != cachedRebuilds)
+        if (g_geometryCache->elements.data() != cachedElements)
             throw std::runtime_error("Metric text changes rediscovered the entire XAML tree");
         hidden.Height(38); hidden.Visibility(Visibility::Visible);
         frame.UpdateLayout(); Pump();
-        if (g_widgetHost.Visibility() != Visibility::Collapsed || g_geometryCache.rebuilds != cachedRebuilds)
+        if (g_widgetHost.Visibility() != Visibility::Collapsed || g_geometryCache->elements.data() != cachedElements)
             throw std::runtime_error("Cached hidden control did not become an obstacle");
         hidden.Visibility(Visibility::Collapsed); frame.UpdateLayout(); Pump();
         if (g_widgetHost.Visibility() != Visibility::Visible)
@@ -731,7 +781,7 @@ int wmain(int argc, wchar_t** argv) {
         root.Children().RemoveAtEnd();
         Button replacement; replacement.Width(1920); replacement.Height(38);
         root.Children().Append(replacement); frame.UpdateLayout(); Pump();
-        if (g_widgetHost.Visibility() != Visibility::Collapsed || g_geometryCache.rebuilds <= cachedRebuilds)
+        if (g_widgetHost.Visibility() != Visibility::Collapsed || std::none_of(g_geometryCache->elements.begin(), g_geometryCache->elements.end(), [&](const auto& item) { return item.element == replacement; }))
             throw std::runtime_error("Same-count child replacement escaped cache invalidation");
         root.Children().RemoveAtEnd(); root.Children().RemoveAtEnd();
         // Centered layout does not necessarily translate by Margin.Left. A
@@ -771,10 +821,10 @@ int wmain(int argc, wchar_t** argv) {
         UpdateWidgetText(true); frame.UpdateLayout(); Pump();
         WNDCLASSW editorClass{}; editorClass.hInstance = PlacementModule();
         editorClass.lpfnWndProc = MoveEditorProc; editorClass.lpszClassName = kMoveWindowClass;
-        if (!RegisterClassW(&editorClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+        if (!EnsurePlacementClass(editorClass, g_moveClassRegistered))
             throw std::runtime_error("Preview test class registration failed");
         g_moveEditor = std::make_shared<MoveEditorState>();
-        HWND preview = CreateWindowExW(0, kMoveWindowClass, L"", WS_CHILD, 0, 0, 410, 38,
+        HWND preview = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, kMoveWindowClass, L"", WS_POPUP, 0, 0, 410, 38,
                                        window, nullptr, editorClass.hInstance, nullptr);
         if (!preview) throw std::runtime_error("Preview render window failed");
         g_moveEditor->window = preview; g_moveEditorWindow = preview; g_moveEditor->source = g_taskbarWindow.load();
@@ -989,11 +1039,18 @@ int wmain(int argc, wchar_t** argv) {
         g_cpuHistory = {{historyTime, 25}, {historyTime + std::chrono::seconds(1), 26}};
         g_gpuHistory = {{historyTime, 10}, {historyTime + std::chrono::seconds(1), std::nullopt}};
         g_lastRenderedMetricsSequence = 42;
+        auto measuredFamily = g_measuredFontFamily;
+        auto measuredSize = g_measuredFontSize;
+        auto capacityBudgets = g_capacityBudgets;
+        auto fontWidths = g_widgetFontMetrics.widths;
         RemoveWidgetForMoveContext moveRemoval; RemoveWidgetForMove(&moveRemoval);
         if (!moveRemoval.succeeded || g_cpuHistory.size() != 2 || g_gpuHistory.size() != 2 ||
             g_cpuHistory.back().value != 26 || g_gpuHistory.back().value ||
-            g_lastRenderedMetricsSequence != 42 || !g_geometryCache.elements.empty())
+            g_lastRenderedMetricsSequence != 42 || g_geometryCache.has_value())
             throw std::runtime_error("Move teardown lost metric history/sequence or retained XAML cache");
+        if (g_measuredFontFamily != measuredFamily || g_measuredFontSize != measuredSize ||
+            g_capacityBudgets != capacityBudgets || g_widgetFontMetrics.widths != fontWidths)
+            throw std::runtime_error("Move teardown discarded reusable plain font measurements");
         std::wcout << L"PASS: XAML resize/restore, mapping/cache, margins, reservation rollback, preview renders, history-preserving teardown\n";
 
     } catch (const hresult_error& error) {

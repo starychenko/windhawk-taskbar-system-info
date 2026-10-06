@@ -2,9 +2,14 @@
 #include <new>
 
 bool observeTableAllocations = false;
+bool failNextAllocation = false;
 size_t sensorTableAllocation = 0, readingTableAllocation = 0, tableAllocations = 0;
 void (*mutateTablePublication)() = nullptr;
 void* operator new(size_t size) {
+    if (failNextAllocation) {
+        failNextAllocation = false;
+        throw std::bad_alloc();
+    }
     if (observeTableAllocations && (size == sensorTableAllocation || size == readingTableAllocation)) {
         ++tableAllocations;
         if (mutateTablePublication) mutateTablePublication();
@@ -16,7 +21,10 @@ void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, size_t) noexcept { std::free(memory); }
 
 #include "regression-fakes.h"
+BOOL KeepPreviewHidden(HWND, int) { return FALSE; }
+#define ShowWindow KeepPreviewHidden
 #include "../taskbar-system-info.wh.cpp"
+#undef ShowWindow
 #undef PdhOpenQueryW
 #undef PdhCloseQuery
 #undef PdhAddEnglishCounterW
@@ -123,6 +131,12 @@ void HistoryAndScheduling() {
     settings.gpuMemoryMode = GpuMemoryMode::Dedicated;
     Check(!UseSharedGpuMemory(ambiguous, settings),
           "explicit dedicated override must resolve ambiguous legacy 512 MiB GPUs");
+}
+
+TaskbarPlacement ResolveTaskbarPlacement(const ModSettings& settings, const TaskbarGeometry& geometry,
+                                        PreferredPosition preferred, bool allowReservation = true) {
+    return ResolvePlacementForSize(settings, geometry, preferred, settings.width,
+        std::max(0.85, 9.0 / settings.fontSize), kWidgetHeight, allowReservation);
 }
 
 void AdaptivePlacement() {
@@ -1252,8 +1266,51 @@ void NativeTemperatureRecovery() {
     g_d3dkmtQueryAdapterInfo = nullptr;
 }
 
+void PlacementClassOwnership() {
+    for (auto name : {kMoveWindowClass, kPlacementWindowClass}) {
+        bool registered = false;
+        WNDCLASSW cls{};
+        cls.hInstance = PlacementModule();
+        cls.lpfnWndProc = DefWindowProcW;
+        cls.lpszClassName = name;
+        Check(RegisterClassW(&cls) != 0, "register a foreign class with the same name");
+        Check(!EnsurePlacementClass(cls, registered) && !registered,
+              "a fresh module never adopts a previously registered class");
+        Check(UnregisterClassW(name, cls.hInstance), "remove the foreign test class");
+        Check(EnsurePlacementClass(cls, registered) && registered,
+              "the current module records successful registration");
+        Check(EnsurePlacementClass(cls, registered), "reuse a class registered by this load");
+        HWND window = CreateWindowExW(0, name, L"", 0, 0, 0, 0, 0,
+                                     HWND_MESSAGE, nullptr, cls.hInstance, nullptr);
+        Check(window != nullptr, "create a hidden class ownership fixture");
+        ReleasePlacementClass(name, registered);
+        Check(registered, "failed unregistration retains ownership for a retry");
+        Check(DestroyWindow(window), "destroy the class ownership fixture");
+        ReleasePlacementClass(name, registered);
+        Check(!registered, "successful unregistration clears ownership");
+        Check(EnsurePlacementClass(cls, registered), "register again after teardown");
+        ReleasePlacementClass(name, registered);
+        Check(!registered, "repeated load/unload leaves no class behind");
+    }
+}
+
 void MoveWindowLifecycle() {
     auto settings = std::make_shared<ModSettings>();
+    Check(settings->moveHotkey.empty(), "moving is opt-in for new and upgraded installations");
+    { std::lock_guard lock(g_settingsMutex); g_settings = settings; }
+    g_unloading = false;
+    EnsurePlacementControl(*settings);
+    Check(g_placementControlWindow && !g_hotkeyRegistered,
+          "the default control does not register a global shortcut");
+    auto epoch = g_moveEpoch.load();
+    failNextAllocation = true;
+    SendMessageW(g_placementControlWindow, WM_HOTKEY, kMoveHotkeyId, 0);
+    bool allocationThrown = !failNextAllocation;
+    failNextAllocation = false;
+    Check(allocationThrown && g_moveEpoch.load() == epoch + 1 && !g_moveEditorWindow,
+          "an allocation failure in WM_HOTKEY is contained and cancels safely");
+    Check(!EnumerateDisplayMonitors().empty(),
+          "native display enumeration recovers after a callback allocation failure");
     settings->moveHotkey = L"Ctrl+Alt+Shift+F24";
     { std::lock_guard lock(g_settingsMutex); g_settings = settings; }
     g_unloading = false;
@@ -1289,9 +1346,9 @@ void MoveWindowLifecycle() {
                                   0, 0, 500, 100, nullptr, nullptr, parentClass.hInstance, nullptr);
     WNDCLASSW cls{}; cls.hInstance = PlacementModule(); cls.lpfnWndProc = MoveEditorProc;
     cls.lpszClassName = kMoveWindowClass;
-    Check(RegisterClassW(&cls) != 0, "register the real preview callback");
+    Check(EnsurePlacementClass(cls, g_moveClassRegistered), "register the real preview callback");
     g_moveEditor = std::make_shared<MoveEditorState>();
-    HWND preview = CreateWindowExW(0, cls.lpszClassName, L"", WS_CHILD,
+    HWND preview = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, cls.lpszClassName, L"", WS_POPUP,
                                    0, 0, 410, 38, parent, nullptr, cls.hInstance, nullptr);
     Check(preview != nullptr, "create preview under a hidden parent without desktop interaction");
     g_moveEditor->window = preview; g_moveEditorWindow = preview;
@@ -1353,7 +1410,7 @@ void MoveWindowLifecycle() {
     Check(g_previewGraphicsToken == 0, "closing the preview releases its graphics runtime");
     Check(surfaceOwner.expired(), "controlled preview close destroys its GDI surface before module shutdown");
     g_moveEditor = std::make_shared<MoveEditorState>();
-    preview = CreateWindowExW(0, cls.lpszClassName, L"", WS_CHILD,
+    preview = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, cls.lpszClassName, L"", WS_POPUP,
                              0, 0, 410, 38, parent, nullptr, cls.hInstance, nullptr);
     Check(preview != nullptr, "reopen the editor for a module-unload cancellation");
     g_moveEditor->window = preview; g_moveEditorWindow = preview;
@@ -1374,6 +1431,8 @@ void MoveWindowLifecycle() {
     RemovePlacementControl();
     Check(!IsWindow(control) && !g_placementControlWindow && !g_hotkeyRegistered && !g_geometryQueued,
           "teardown releases hidden control, registrations and queued state");
+    Check(!g_moveClassRegistered && !g_placementClassRegistered,
+          "teardown unregisters both classes owned by this load");
     DestroyWindow(parent); UnregisterClassW(parentClass.lpszClassName, parentClass.hInstance);
     SetPlacementProfiles({}); fake::localStorage.clear();
 }
@@ -1393,6 +1452,11 @@ void WindowNotifications() {
     Check(SetWindowSubclass(window, TaskbarNotificationsProc, 1, 0), "attach production subclass");
     g_placementApplyPending = false;
     g_placementFailures = 7;
+    auto epoch = g_moveEpoch.load();
+    SendMessageW(window, WM_SETTINGCHANGE, SPI_SETMOUSE, 0);
+    Check(g_moveEpoch.load() == epoch, "unrelated settings broadcasts do not cancel moving");
+    SendMessageW(window, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+    Check(g_moveEpoch.load() == epoch + 1, "work-area changes invalidate the editor");
     SendMessageW(window, WM_DISPLAYCHANGE, 32, 0);
     Check(g_placementApplyPending && g_placementFailures == 0,
           "same-count display change must invalidate placement and retry backoff");
@@ -1411,6 +1475,8 @@ void WindowNotifications() {
 
 int main() {
     try {
+        PlacementClassOwnership();
+        std::cout << "PASS: native window class collision refusal and ownership retries\n";
         HistoryAndScheduling();
         std::cout << "PASS: timestamped history, scheduling, formatting, layout bounds\n";
         AdaptivePlacement();

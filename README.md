@@ -24,10 +24,11 @@ Normal readings use the taskbar text color. Temperature and memory alerts add
 color when a threshold is reached. Light, dark and Windows high-contrast themes
 are supported. You can also set the fonts, colors, opacity and alert thresholds.
 
-In normal use, clicks pass through to the taskbar. Press **Ctrl+Alt+M** when you
-want to move the widget. It stays live, gets a hand cursor and a translucent
-background only while dragging, and snaps to a usable place. A red frame means the position cannot be
-saved. **Enter** saves it, **Esc** cancels it.
+In normal use, clicks pass through to the taskbar. To enable moving, set
+**Move widget hotkey** to an unused combination and press it. The widget stays
+live, gets a hand cursor and a translucent background only while dragging, and
+snaps to a usable place. A red frame means the position cannot be saved.
+**Enter** saves it, **Esc** cancels it.
 
 ## Quick start
 
@@ -35,7 +36,8 @@ saved. **Enter** saves it, **Esc** cancels it.
    additional software. See [Install](#install) for the current source.
 2. Leave **Temperature source** on **Automatic**. If a temperature stays at
    `--°C`, check [Setting up HWiNFO temperatures](#setting-up-hwinfo-temperatures).
-3. Press **Ctrl+Alt+M**, drag the widget along the taskbar, then press **Enter**.
+3. Set **Move widget hotkey** to an unused combination, press it, drag the widget
+   along the taskbar, then press **Enter**.
    You can drag onto another monitor's taskbar too. **Esc** keeps the old position.
 4. If you want space before Start, enable **Reserve space before the Start button**.
    The mod only shifts the button group when the measured controls still fit.
@@ -125,8 +127,10 @@ point under the cursor. **Enter** checks the current layout again before saving.
 
 ## Moving and saved positions
 
-Press **Ctrl+Alt+M** to enter move mode. Grab the widget with the hand cursor and
-drag it where you need it. The readings and graphs keep updating while you move.
+Move mode is disabled by default. Set **Move widget hotkey** to an unused
+combination in settings, then press it to enter move mode. Grab the widget with
+the hand cursor and drag it where you need it. The readings and graphs keep
+updating while you move.
 The original widget is hidden during editing and returns when you cancel.
 The normal widget has no glass background. Glass appears only while you hold the
 mouse button and drag. After release, the background clears and a thin outline
@@ -143,12 +147,13 @@ the mouse keeps the preview there, so you can check the position before saving i
 | **Home** | Prepares a return to **Taskbar monitor** and **Left offset**. Press Enter to confirm or Esc to cancel. |
 
 Clicking another application, changing settings, changing the display setup or
-unloading the mod also cancels editing. The widget and reserved button space
+work area, or unloading the mod also cancels editing. The widget and reserved button space
 move only after confirmation. A failed move or storage write keeps the previous
 saved position.
 
-You can change **Move widget hotkey**. It accepts Ctrl, Alt, Shift or Win with
-one letter, digit or F1-F24. Leave it empty to disable the shortcut. An invalid
+Choose a **Move widget hotkey** that does not conflict with other applications
+or AltGr typing. It accepts Ctrl, Alt, Shift or Win with one letter, digit or
+F1-F24. Leave it empty to disable the shortcut. An invalid
 or already registered shortcut is not registered; the Windhawk log gives the
 reason.
 
@@ -313,7 +318,7 @@ distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
 | **Widget width** | Preferred full-layout width, including side padding. Range: 330-800 logical pixels; default: 410. Adaptive layouts use their measured size within the available space. |
 | **Left offset** | Preferred horizontal position before dragging. Nonnegative logical pixels; default: 10. |
 | **Taskbar monitor** | Initial display, range 1-32. Monitor 1 is primary; the rest follow their position in the virtual desktop and may differ from Windows numbering. |
-| **Move widget hotkey** | Default: `Ctrl+Alt+M`. Empty disables it. |
+| **Move widget hotkey** | Disabled by default. Set an unused combination to enable moving. |
 | **Reserve space before the Start button** | Allows the button group to shift when a safe reservation fits. Off by default. |
 | **Reserved space gap** | Gap after a reservation. Range: 0-100 logical pixels; default: 8; effective minimum: 6. |
 | **Update interval** | Collection interval, 1-10 seconds; default: 1. |
@@ -376,7 +381,7 @@ placement errors and sensor mismatches. It does not print every sample.
 
 ## Compatibility
 
-The current source is **1.7.0**, built with Windhawk **1.7.3** for Windows 11.
+The current source is **1.7.1**, built with Windhawk **1.7.3** for Windows 11.
 The widget targets horizontal primary and secondary taskbars. x64 and ARM64
 builds pass; ARM64 hardware has not been checked.
 
@@ -488,7 +493,8 @@ expired publications skip the copy and discovery resumes when polling returns.
 Registry write times are checked before and after reading to reject concurrent
 changes. Numeric parsing and displayed decimals do not depend on Explorer's locale.
 
-See [the 1.7.0 release notes and verification](docs/releases/1.7.0.md),
+See [the 1.7.1 release notes and verification](docs/releases/1.7.1.md),
+the [1.7.1 upstream review fixes and remaining physical checks](docs/review-resolution-2026-10-04.md),
 [the placement verification record](docs/placement-verification-2026-10-04.md)
 for the checks and remaining Explorer scenarios, and
 [the metrics review record](docs/review-resolution-2026-09-17.md) for provider
