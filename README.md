@@ -493,7 +493,7 @@ expired publications skip the copy and discovery resumes when polling returns.
 Registry write times are checked before and after reading to reject concurrent
 changes. Numeric parsing and displayed decimals do not depend on Explorer's locale.
 
-See [the 1.7.0 release notes and verification](docs/releases/1.7.0.md),
+See [the 1.7.1 release notes and verification](docs/releases/1.7.1.md),
 the [1.7.1 upstream review fixes and remaining physical checks](docs/review-resolution-2026-10-04.md),
 [the placement verification record](docs/placement-verification-2026-10-04.md)
 for the checks and remaining Explorer scenarios, and
