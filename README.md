@@ -325,6 +325,7 @@ distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
 | **Widget width** | Preferred full-layout width, including side padding. Range: 330-800 logical pixels; default: 410. Adaptive layouts use their measured size within the available space. |
 | **Left offset** | Preferred horizontal position before dragging. Nonnegative logical pixels; default: 10. |
 | **Taskbar monitor** | Initial display, range 1-32. Monitor 1 is primary; the rest follow their position in the virtual desktop and may differ from Windows numbering. |
+| **Show on all monitors** | Off by default. Adds a read-only copy of the widget to every other monitor's taskbar. Each copy uses its own taskbar theme and responds to layout changes independently of metric sampling, including on other UI threads. Copies use that monitor's saved position or Left offset and never reserve space before Start. |
 | **Move widget hotkey** | Disabled by default. Set an unused combination to enable moving. |
 | **Reserve space before the Start button** | Allows the button group to shift when a safe reservation fits. Off by default. |
 | **Reserved space gap** | Gap after a reservation. Range: 0-100 logical pixels; default: 8; effective minimum: 6. |

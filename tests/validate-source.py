@@ -165,7 +165,7 @@ def main() -> int:
     assert metadata.get("description:uk-UA")
 
     settings = parse_settings(extract_block(source, "WindhawkModSettings"))
-    assert len(settings) == 31, f"Expected 31 settings, got {len(settings)}"
+    assert len(settings) == 32, f"Expected 32 settings, got {len(settings)}"
     assert next(item for item in settings if "moveHotkey" in item)["moveHotkey"] == ""
 
     setting_keys: set[str] = set()
@@ -189,6 +189,9 @@ def main() -> int:
 
     adaptive_colors = next(item for item in settings if "adaptiveColors" in item)
     assert adaptive_colors["adaptiveColors"] is True
+
+    all_monitors = next(item for item in settings if "allMonitors" in item)
+    assert all_monitors["allMonitors"] is False
 
     show_network = next(item for item in settings if "showNetwork" in item)
     assert show_network["showNetwork"] is False
@@ -451,7 +454,7 @@ def main() -> int:
     assert "generic HWiNFO matching can" in source
     assert "!g_hasResolvedGpuAdapterIdentity" in source
     assert "bool gpuAvailable = false;" in source
-    assert "SetTextIfChanged(g_gpuUsageText, snapshot.gpuAvailable" in source
+    assert "SetTextIfChanged(view.texts[7], snapshot.gpuAvailable" in source
     assert 'L"--%"' in source
     assert "RecoverFromMissingGpuSample" in source
     assert "g_nextGpuAdapterResolve" in source
@@ -689,7 +692,8 @@ def main() -> int:
     assert "for (const MetricsSnapshot& newSnapshot : newSnapshots)" in update_widget
     assert "UpdateTimerInterval();" in update_widget
     assert "std::deque<PublishedMetricsSnapshot> g_publishedMetrics" in source
-    assert "SetTextIfChanged" in update_widget
+    assert "RenderWidgetValues(PrimaryElements()" in update_widget
+    assert "SetTextIfChanged" in extract_cpp_function(source, "RenderWidgetValues")
     assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" not in source
     assert "TextTrimming::CharacterEllipsis" in source
     assert "RefreshThemeBrushes" in source
