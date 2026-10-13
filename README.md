@@ -391,7 +391,7 @@ placement errors and sensor mismatches. It does not print every sample.
 
 ## Compatibility
 
-The current source is **1.7.2**, built with Windhawk **1.7.3** for Windows 11.
+The current source is **1.8.0**, built with Windhawk **1.7.3** for Windows 11.
 The widget targets horizontal primary and secondary taskbars. x64 and ARM64
 builds pass; ARM64 hardware has not been checked.
 
@@ -503,7 +503,7 @@ expired publications skip the copy and discovery resumes when polling returns.
 Registry write times are checked before and after reading to reject concurrent
 changes. Numeric parsing and displayed decimals do not depend on Explorer's locale.
 
-See [the 1.7.2 release notes and verification](docs/releases/1.7.2.md),
+See [the 1.8.0 release notes and verification](docs/releases/1.8.0.md),
 the [1.7.1 upstream review fixes and remaining physical checks](docs/review-resolution-2026-10-04.md),
 [the placement verification record](docs/placement-verification-2026-10-04.md)
 for the checks and remaining Explorer scenarios, and
