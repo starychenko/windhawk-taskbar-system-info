@@ -11,7 +11,7 @@
 // @license         GPL-3.0
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lpdh -ldxgi -lcomctl32 -lgdi32 -lgdiplus -DWIN32_LEAN_AND_MEAN
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lpdh -ldxgi -lcomctl32 -lgdi32 -lgdiplus -liphlpapi -DWIN32_LEAN_AND_MEAN
 // ==/WindhawkMod==
 
 // Taskbar XAML discovery and window-thread marshaling are based on techniques
@@ -292,8 +292,9 @@ backed by system RAM and is not a fixed VRAM chip capacity. If a driver or an
 older low-memory card is detected incorrectly, set the memory type explicitly.
 
 The mod reads system information. It does not control clocks, fans, power limits
-or GPU settings. It does not collect network/disk activity, send telemetry or
-make internet requests.
+or GPU settings. Network rates come from local Windows interface counters,
+summed over connected physical adapters; no traffic is inspected. The mod does
+not collect disk activity, send telemetry or make internet requests.
 
 ## Temperature providers
 
@@ -382,6 +383,8 @@ distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
 | **Reserved space gap** | Gap after a reservation. Range: 0-100 logical pixels; default: 8; effective minimum: 6. |
 | **Update interval** | Collection interval, 1-10 seconds; default: 1. |
 | **Graph history** | CPU/GPU history, 15-180 seconds; default: 60. |
+| **Show network speed** | Off by default. Adds download and upload rates after RAM/VRAM. The widget grows by this column's measured width, in addition to Widget width. |
+| **Network speed unit** | Bytes per second (1024-based KB/s, MB/s, GB/s; default) or bits per second (1000-based Kbps, Mbps, Gbps). |
 
 ### Appearance
 
@@ -515,6 +518,24 @@ Released under [GPL-3.0](https://github.com/starychenko/windhawk-taskbar-system-
   $name:uk-UA: Історія графіків
   $description: "CPU and GPU graph window, from 15 to 180 seconds. It is sampled at the configured update interval."
   $description:uk-UA: "Проміжок історії графіків CPU і GPU від 15 до 180 секунд. Дані додаються із заданим інтервалом оновлення."
+
+- showNetwork: false
+  $name: Show network speed
+  $name:uk-UA: Показувати швидкість мережі
+  $description: "Adds download and upload rates after RAM/VRAM. The widget grows by the measured width of this column, in addition to Widget width."
+  $description:uk-UA: "Додає швидкість завантаження та вивантаження після RAM/VRAM. Віджет розширюється на виміряну ширину цієї колонки понад Ширину блока."
+
+- networkUnit: bytes
+  $name: Network speed unit
+  $name:uk-UA: Одиниця швидкості мережі
+  $description: "Bytes use 1024-based KB/s, MB/s and GB/s. Bits use 1000-based Kbps, Mbps and Gbps."
+  $description:uk-UA: "Байти використовують KB/s, MB/s і GB/s з основою 1024. Біти використовують Kbps, Mbps і Gbps з основою 1000."
+  $options:
+  - bytes: Bytes per second (MB/s)
+  - bits: Bits per second (Mbps)
+  $options:uk-UA:
+  - bytes: Байти за секунду (MB/s)
+  - bits: Біти за секунду (Mbps)
 
 - fontSize: 11
   $name: Font size
@@ -681,6 +702,9 @@ Released under [GPL-3.0](https://github.com/starychenko/windhawk-taskbar-system-
 #include <commctrl.h>
 #include <objidl.h>
 #include <gdiplus.h>
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#include <iphlpapi.h>
 
 #include <algorithm>
 #include <array>
@@ -804,6 +828,8 @@ struct ModSettings {
     int monitor = 1;
     bool adaptiveColors = true;
     bool reserveSpace = false;
+    bool showNetwork = false;
+    bool networkBits = false;
     int reserveGap = 8;
     int updateInterval = 1;
     int historySeconds = 60;
@@ -891,6 +917,10 @@ std::optional<std::list<FrameworkElement::Loaded_revoker>> g_loadedRevokers{
 [[clang::no_destroy]] TextBlock g_vramLabel{nullptr};
 [[clang::no_destroy]] TextBlock g_vramPercentText{nullptr};
 [[clang::no_destroy]] TextBlock g_vramCapacityText{nullptr};
+[[clang::no_destroy]] TextBlock g_netDownLabel{nullptr};
+[[clang::no_destroy]] TextBlock g_netDownText{nullptr};
+[[clang::no_destroy]] TextBlock g_netUpLabel{nullptr};
+[[clang::no_destroy]] TextBlock g_netUpText{nullptr};
 [[clang::no_destroy]] XamlPath g_cpuGraph{nullptr};
 [[clang::no_destroy]] XamlPath g_gpuGraph{nullptr};
 [[clang::no_destroy]] XamlRectangle g_ramTrack{nullptr};
@@ -899,6 +929,7 @@ std::optional<std::list<FrameworkElement::Loaded_revoker>> g_loadedRevokers{
 [[clang::no_destroy]] XamlRectangle g_vramFill{nullptr};
 // All four rows keep their controls when the layout changes.
 [[clang::no_destroy]] std::array<Grid, 4> g_metricRows{nullptr, nullptr, nullptr, nullptr};
+[[clang::no_destroy]] std::array<Grid, 2> g_netRows{nullptr, nullptr};  // Down, up.
 bool g_layoutGraphsVisible = true;
 [[clang::no_destroy]] SolidColorBrush g_textBrush{nullptr};
 [[clang::no_destroy]] SolidColorBrush g_graphBrush{nullptr};
@@ -982,6 +1013,9 @@ struct MetricsSnapshot {
     double vramUsedGb = 0.0;
     double vramTotalGb = 0.0;
     bool vramAvailable = false;
+    double netDownBytes = 0.0;  // Per second.
+    double netUpBytes = 0.0;
+    bool netAvailable = false;
     std::optional<double> cpuTemp;
     std::optional<double> gpuTemp;
     TemperatureProvider cpuTempProvider = TemperatureProvider::None;
@@ -1070,6 +1104,8 @@ void LoadSettings() {
     settings.adaptiveColors = Wh_GetIntSetting(L"adaptiveColors") != 0;
     settings.reserveSpace = Wh_GetIntSetting(L"reserveSpace") != 0;
     settings.reserveGap = std::clamp(Wh_GetIntSetting(L"reserveGap"), 0, 100);
+    settings.showNetwork = Wh_GetIntSetting(L"showNetwork") != 0;
+    settings.networkBits = GetStringSetting(L"networkUnit") == L"bits";
     settings.updateInterval =
         std::clamp(Wh_GetIntSetting(L"updateInterval"), 1, 10);
     settings.historySeconds =
@@ -3524,6 +3560,65 @@ void ReadPdhMetrics(MetricsSnapshot& snapshot, const ModSettings& settings) {
     }
 }
 
+// Accessed only on the metrics worker thread.
+struct NetworkCounterState {
+    std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> previous;
+    SampleTime time{};
+};
+NetworkCounterState g_networkCounters;
+
+void AccumulateNetworkSample(MetricsSnapshot& snapshot,
+                             NetworkCounterState& state,
+                             const MIB_IF_ROW2* rows, size_t count,
+                             SampleTime now) {
+    snapshot.netAvailable = false;
+    snapshot.netDownBytes = snapshot.netUpBytes = 0;
+    decltype(state.previous) current;
+    double received = 0, sent = 0;
+    bool comparable = false;
+    for (size_t i = 0; i < count; ++i) {
+        const auto& row = rows[i];
+        if (!row.InterfaceAndOperStatusFlags.HardwareInterface ||
+            row.InterfaceAndOperStatusFlags.FilterInterface ||
+            row.OperStatus != IfOperStatusUp ||
+            row.Type == IF_TYPE_SOFTWARE_LOOPBACK) {
+            continue;
+        }
+        current[row.InterfaceLuid.Value] = {row.InOctets, row.OutOctets};
+        auto it = state.previous.find(row.InterfaceLuid.Value);
+        // Missing/reset adapters establish a baseline, never a false zero.
+        if (it != state.previous.end() &&
+            row.InOctets >= it->second.first &&
+            row.OutOctets >= it->second.second) {
+            comparable = true;
+            received += static_cast<double>(row.InOctets - it->second.first);
+            sent += static_cast<double>(row.OutOctets - it->second.second);
+        }
+    }
+    double seconds = std::chrono::duration<double>(now - state.time).count();
+    if (comparable && state.time != SampleTime{} && seconds >= 0.2) {
+        snapshot.netDownBytes = received / seconds;
+        snapshot.netUpBytes = sent / seconds;
+        snapshot.netAvailable = true;
+    }
+    state.previous = std::move(current);
+    state.time = now;
+}
+
+void ReadNetwork(MetricsSnapshot& snapshot) {
+    MIB_IF_TABLE2* table = nullptr;
+    if (GetIfTable2(&table) != NO_ERROR || !table) {
+        g_networkCounters = {};
+        snapshot.netAvailable = false;
+        snapshot.netDownBytes = snapshot.netUpBytes = 0;
+        return;
+    }
+    // Release the API allocation even if building the baseline throws.
+    std::unique_ptr<MIB_IF_TABLE2, decltype(&FreeMibTable)> owner(table, FreeMibTable);
+    AccumulateNetworkSample(snapshot, g_networkCounters, table->Table,
+                            table->NumEntries, SampleTime::clock::now());
+}
+
 MetricsSnapshot CollectMetrics(const ModSettings& settings) {
     MetricsSnapshot snapshot;
     snapshot.capturedAt = std::chrono::steady_clock::now();
@@ -3532,6 +3627,11 @@ MetricsSnapshot CollectMetrics(const ModSettings& settings) {
         snapshot.cpuAvailable = true;
     }
     ReadMemory(snapshot);
+    if (settings.showNetwork) {
+        ReadNetwork(snapshot);
+    } else {
+        g_networkCounters = {};
+    }
     ReadPdhMetrics(snapshot, settings);
     ReadTemperatures(snapshot, settings);
     return snapshot;
@@ -3767,6 +3867,27 @@ std::wstring FormatCapacity(double usedGb, double totalGb, bool available) {
            FormatFixed(totalGb, totalDecimals) + L"G";
 }
 
+constexpr PCWSTR kNetworkByteUnits[] = {L" KB/s", L" MB/s", L" GB/s"};
+constexpr PCWSTR kNetworkBitUnits[] = {L" Kbps", L" Mbps", L" Gbps"};
+
+std::wstring FormatNetworkRate(double bytesPerSecond, bool available,
+                               bool bits) {
+    if (!available || !std::isfinite(bytesPerSecond) || bytesPerSecond < 0) {
+        return L"--";
+    }
+    double step = bits ? 1000.0 : 1024.0;
+    double value = (bits ? bytesPerSecond * 8 : bytesPerSecond) / step;
+    size_t unit = 0;
+    while (value >= 999.5 && unit < 2) {
+        value /= step;
+        ++unit;
+    }
+    // At most three digits, so the column width stays fixed.
+    value = std::min(value, 999.0);
+    return FormatFixed(value, value < 9.95 ? 1 : 0) +
+           (bits ? kNetworkBitUnits : kNetworkByteUnits)[unit];
+}
+
 enum class AlertLevel { Normal, Warning, Critical };
 
 AlertLevel g_cpuTemperatureAlert = AlertLevel::Normal;
@@ -3913,7 +4034,8 @@ void ApplyThemeOpacities(const ModSettings& settings) {
     ThemeOpacityValues opacities =
         ResolveThemeOpacities(highContrast, settings.textOpacity);
     for (TextBlock label :
-         {g_cpuLabel, g_gpuLabel, g_ramLabel, g_vramLabel}) {
+         {g_cpuLabel, g_gpuLabel, g_ramLabel, g_vramLabel, g_netDownLabel,
+          g_netUpLabel}) {
         if (label) {
             label.Opacity(opacities.label);
         }
@@ -3921,7 +4043,7 @@ void ApplyThemeOpacities(const ModSettings& settings) {
     for (TextBlock value : {g_cpuUsageText, g_cpuTempText, g_gpuUsageText,
                             g_gpuTempText, g_ramPercentText,
                             g_ramCapacityText, g_vramPercentText,
-                            g_vramCapacityText}) {
+                            g_vramCapacityText, g_netDownText, g_netUpText}) {
         if (value) {
             value.Opacity(opacities.value);
         }
@@ -4266,6 +4388,7 @@ struct WidgetFontMetrics {
     std::array<double, 12> widths{28, 34, 40, 43, 38, 48,
                                   28, 34, 40, 43, 38, 48};
     double textHeight = 15;
+    double netLabel = 12, netValue = 52;
 };
 struct WidgetLayout {
     WidgetLayoutMode mode = WidgetLayoutMode::Full;
@@ -4274,11 +4397,14 @@ struct WidgetLayout {
     std::array<double, 4> groups{};  // CPU, GPU, RAM, VRAM.
     std::array<Rect, 12> cells{};    // CPU, RAM, GPU, VRAM, three fields each.
     std::array<Rect, 2> graphs{}, bars{};
+    double net = 0;                  // Network group width; 0 when hidden.
+    std::array<Rect, 4> netCells{};  // Down label/value, up label/value.
     bool legacy = true, showGraphs = true, showMemoryDetails = true;
 };
 std::optional<WidgetLayout> g_widgetLayout;
 std::wstring g_measuredFontFamily;
 int g_measuredFontSize = 0;
+bool g_measuredNetworkBits = false;
 std::array<std::wstring, 2> g_capacityBudgets{L"--/--G", L"--/--G"};
 uint64_t g_capacityBudgetRevision = 0, g_measuredCapacityRevision = 0;
 WidgetFontMetrics g_widgetFontMetrics;
@@ -4288,6 +4414,7 @@ WidgetFontMetrics g_widgetFontMetrics;
 WidgetFontMetrics MeasureWidgetFont(const ModSettings& settings) {
     if (g_measuredFontFamily == settings.fontFamily &&
         g_measuredFontSize == settings.fontSize &&
+        g_measuredNetworkBits == settings.networkBits &&
         g_measuredCapacityRevision == g_capacityBudgetRevision) {
         return g_widgetFontMetrics;
     }
@@ -4370,11 +4497,27 @@ WidgetFontMetrics MeasureWidgetFont(const ModSettings& settings) {
         }
         result.widths[memory == 0 ? 5 : 11] = width;
     }
+    result.netLabel = std::max(measure(L"\u2193", true), measure(L"\u2191", true));
+    result.netValue = measure(L"--", false);
+    for (PCWSTR unit :
+         settings.networkBits ? kNetworkBitUnits : kNetworkByteUnits) {
+        for (wchar_t digit = L'0'; digit <= L'9'; ++digit) {
+            for (auto text : {std::wstring(3, digit),
+                              std::wstring{digit, L'.', digit}}) {
+                text += unit;
+                result.netValue =
+                    std::max(result.netValue, measure(text.c_str(), false));
+            }
+        }
+    }
+    // Separates the arrow from the widest value.
+    result.netValue += 4;
     if (!std::isfinite(result.textHeight) || result.textHeight <= 0) {
         throw hresult_error(E_FAIL, L"Cannot measure the widget font");
     }
     g_measuredFontFamily = settings.fontFamily;
     g_measuredFontSize = settings.fontSize;
+    g_measuredNetworkBits = settings.networkBits;
     g_measuredCapacityRevision = g_capacityBudgetRevision;
     return g_widgetFontMetrics = result;
 }
@@ -4428,9 +4571,13 @@ WidgetLayout BuildWidgetLayout(const ModSettings& settings,
     }
     double compute = widths[0] + widths[1] + widths[2];
     double memory = widths[3] + widths[4] + widths[5];
+    // The network group is added after the configured width, so enabling it
+    // never squeezes the graphs or memory columns.
+    double net = settings.showNetwork ? font.netLabel + font.netValue : 0;
+    layout.net = net;
     if (legacy) {
         auto columns = ResolveWidgetColumns(settings.width);
-        layout.width = settings.width;
+        layout.width = settings.width + (net > 0 ? net + kColumnGap : 0);
         compute = columns.left;
         memory = columns.right;
         widths[5] = widths[11] = memory - widths[3] - widths[4];
@@ -4444,6 +4591,9 @@ WidgetLayout BuildWidgetLayout(const ModSettings& settings,
         layout.width = 2 * kWidgetSidePadding +
                        (single ? 2 * compute + 2 * memory + 3 * kColumnGap
                                : compute + memory + kColumnGap);
+        if (net > 0) {
+            layout.width += (single ? 2 : 1) * (net + kColumnGap);
+        }
         double minimumRow =
             font.textHeight + (layout.showMemoryDetails ? 2.25 : 0);
         if (layout.showGraphs) {
@@ -4503,6 +4653,20 @@ WidgetLayout BuildWidgetLayout(const ModSettings& settings,
         }
         nextX += layout.groups[group] + kColumnGap;
     }
+    for (int row = 0; net > 0 && row < 2; ++row) {
+        double x = single ? nextX + row * (net + kColumnGap)
+                          : kWidgetSidePadding + compute + memory +
+                                2 * kColumnGap;
+        double y = single ? 0 : row * (layout.rowHeight + layout.rowGap);
+        layout.netCells[2 * row] = {
+            static_cast<float>(x), static_cast<float>(y),
+            static_cast<float>(font.netLabel),
+            static_cast<float>(layout.rowHeight)};
+        layout.netCells[2 * row + 1] = {
+            static_cast<float>(x + font.netLabel), static_cast<float>(y),
+            static_cast<float>(font.netValue),
+            static_cast<float>(layout.rowHeight)};
+    }
     return layout;
 }
 
@@ -4520,7 +4684,15 @@ bool SameWidgetLayout(const WidgetLayout& a, const WidgetLayout& b) {
             return false;
         }
     }
-    return a.groups == b.groups;
+    for (size_t i = 0; i < a.netCells.size(); ++i) {
+        const auto& x = a.netCells[i];
+        const auto& y = b.netCells[i];
+        if (x.X != y.X || x.Y != y.Y || x.Width != y.Width ||
+            x.Height != y.Height) {
+            return false;
+        }
+    }
+    return a.groups == b.groups && a.net == b.net;
 }
 
 void ApplyWidgetGeometry(const ModSettings& settings,
@@ -4551,9 +4723,15 @@ void ApplyWidgetGeometry(const ModSettings& settings,
     for (uint32_t i = 0; i < columns.Size(); ++i) {
         double width = 0;
         if (single) {
-            width = i % 2 ? kColumnGap : layout.groups[i / 2];
+            if (i < 7) {
+                width = i % 2 ? kColumnGap : layout.groups[i / 2];
+            } else if (layout.net > 0) {
+                width = i % 2 ? kColumnGap : layout.net;
+            }
         } else if (i <= 2) {
             width = i == 1 ? kColumnGap : layout.groups[i == 0 ? 0 : 2];
+        } else if (i <= 4 && layout.net > 0) {
+            width = i == 3 ? kColumnGap : layout.net;
         }
         columns.GetAt(i).Width(GridLength{width, GridUnitType::Pixel});
     }
@@ -4583,6 +4761,23 @@ void ApplyWidgetGeometry(const ModSettings& settings,
                 layout.showGraphs ? layout.graphs[group].Width + kGraphLeftGap
                                   : 0,
                 GridUnitType::Pixel});
+        }
+    }
+    for (int index = 0; index < 2; ++index) {
+        auto row = g_netRows[index];
+        if (!row) {
+            continue;
+        }
+        row.Visibility(layout.net > 0 ? Visibility::Visible
+                                      : Visibility::Collapsed);
+        Grid::SetColumn(row, single ? 8 + 2 * index : 4);
+        Grid::SetRow(row, single ? 0 : 2 * index);
+        row.Height(layout.rowHeight);
+        auto fields = row.ColumnDefinitions();
+        for (int field = 0; field < 2; ++field) {
+            fields.GetAt(field).Width(
+                GridLength{layout.netCells[2 * index + field].Width,
+                           GridUnitType::Pixel});
         }
     }
     for (TextBlock text : {g_ramCapacityText, g_vramCapacityText}) {
@@ -5130,6 +5325,7 @@ struct PlacementInputs {
     TaskbarGeometry geometry;
     int width, leftOffset, fontSize, reserveGap;
     bool reserveSpace, reservationRejected, dockReservationActive;
+    bool showNetwork, networkBits;
     std::wstring fontFamily;
     std::optional<double> savedFraction;
     double baselineMargin;
@@ -5326,6 +5522,8 @@ void ApplyTaskbarPlacement(const ModSettings& settings) {
                            settings.reserveSpace,
                            g_reservationRejected,
                            g_dockReservationActive,
+                           settings.showNetwork,
+                           settings.networkBits,
                            settings.fontFamily,
                            savedFraction,
                            margin.Left,
@@ -5437,13 +5635,14 @@ void ApplyWidgetSettings() {
     g_widget.IsHitTestVisible(false);
 
     for (TextBlock label :
-         {g_cpuLabel, g_gpuLabel, g_ramLabel, g_vramLabel}) {
+         {g_cpuLabel, g_gpuLabel, g_ramLabel, g_vramLabel, g_netDownLabel,
+          g_netUpLabel}) {
         ApplyTextStyle(label, true, settings);
     }
     for (TextBlock value : {g_cpuUsageText, g_cpuTempText, g_gpuUsageText,
                             g_gpuTempText, g_ramPercentText,
                             g_ramCapacityText, g_vramPercentText,
-                            g_vramCapacityText}) {
+                            g_vramCapacityText, g_netDownText, g_netUpText}) {
         ApplyTextStyle(value, false, settings);
     }
 
@@ -5562,6 +5761,14 @@ void UpdateWidgetText(bool force = false) {
     SetTextIfChanged(g_vramCapacityText,
                      FormatCapacity(snapshot.vramUsedGb, snapshot.vramTotalGb,
                                     snapshot.vramAvailable));
+    SetTextIfChanged(g_netDownText,
+                     FormatNetworkRate(snapshot.netDownBytes,
+                                       snapshot.netAvailable,
+                                       settings.networkBits));
+    SetTextIfChanged(g_netUpText,
+                     FormatNetworkRate(snapshot.netUpBytes,
+                                       snapshot.netAvailable,
+                                       settings.networkBits));
 
     if (hasNewSample) {
         for (const MetricsSnapshot& newSnapshot : newSnapshots) {
@@ -5892,6 +6099,30 @@ Grid CreateMemoryRow(PCWSTR label,
     return row;
 }
 
+Grid CreateNetworkRow(PCWSTR label,
+                      PCWSTR prefix,
+                      TextBlock& labelText,
+                      TextBlock& valueText) {
+    Grid row;
+    row.Height(kRowHeight);
+    row.IsHitTestVisible(false);
+    row.ColumnDefinitions().Append(PixelColumn(12));
+    row.ColumnDefinitions().Append(PixelColumn(52));
+
+    labelText = CreateCellText((std::wstring(prefix) + L"Label").c_str(),
+                               TextAlignment::Left);
+    labelText.Text(label);
+    valueText = CreateCellText((std::wstring(prefix) + L"Rate").c_str(),
+                               TextAlignment::Right);
+    valueText.Text(L"--");
+
+    Grid::SetColumn(labelText, 0);
+    Grid::SetColumn(valueText, 1);
+    row.Children().Append(labelText);
+    row.Children().Append(valueText);
+    return row;
+}
+
 bool RemoveWidget() {
     RemovePlacementControl();
     if (g_widget && g_actualThemeChangedToken.value) {
@@ -5959,6 +6190,7 @@ bool RemoveWidget() {
     g_widget = nullptr;
     g_widgetLayout.reset();
     for (auto& row : g_metricRows) row = nullptr;
+    for (auto& row : g_netRows) row = nullptr;
     g_layoutGraphsVisible = true;
     // Font bounds and capacity budgets are plain values. Retain them across
     // taskbar transfers; a changed font or total invalidates the cache normally.
@@ -5978,6 +6210,10 @@ bool RemoveWidget() {
     g_vramLabel = nullptr;
     g_vramPercentText = nullptr;
     g_vramCapacityText = nullptr;
+    g_netDownLabel = nullptr;
+    g_netDownText = nullptr;
+    g_netUpLabel = nullptr;
+    g_netUpText = nullptr;
     g_cpuGraph = nullptr;
     g_gpuGraph = nullptr;
     g_ramTrack = nullptr;
@@ -6069,7 +6305,7 @@ bool InjectWidget(FrameworkElement taskbarFrame) {
     Grid::SetColumnSpan(host,
                         std::max(1, static_cast<int>(root.ColumnDefinitions().Size())));
     // Extra columns collapse to zero in the original two-row layout.
-    for (int i = 0; i < 7; ++i) {
+    for (int i = 0; i < 11; ++i) {
         widget.ColumnDefinitions().Append(PixelColumn(0));
     }
     widget.RowDefinitions().Append(PixelRow(kRowHeight));
@@ -6095,6 +6331,15 @@ bool InjectWidget(FrameworkElement taskbarFrame) {
     g_metricRows = {cpuRow, gpuRow, ramRow, vramRow};
     Grid::SetColumn(ramRow, 2); Grid::SetColumn(vramRow, 2);
     for (auto row : g_metricRows) widget.Children().Append(row);
+    g_netRows = {CreateNetworkRow(L"\u2193", L"NetDown", g_netDownLabel,
+                                  g_netDownText),
+                 CreateNetworkRow(L"\u2191", L"NetUp", g_netUpLabel,
+                                  g_netUpText)};
+    for (int index = 0; index < 2; ++index) {
+        Grid::SetRow(g_netRows[index], 2 * index);
+        Grid::SetColumn(g_netRows[index], 4);
+        widget.Children().Append(g_netRows[index]);
+    }
     root.Children().Append(host);
     g_taskbarUiResourcesRegistered = true;
 
@@ -7608,7 +7853,8 @@ void CaptureWidgetPreview(void* value) {
     for (TextBlock text :
          {g_cpuLabel, g_cpuUsageText, g_cpuTempText, g_ramLabel,
           g_ramPercentText, g_ramCapacityText, g_gpuLabel, g_gpuUsageText,
-          g_gpuTempText, g_vramLabel, g_vramPercentText, g_vramCapacityText}) {
+          g_gpuTempText, g_vramLabel, g_vramPercentText, g_vramCapacityText,
+          g_netDownLabel, g_netDownText, g_netUpLabel, g_netUpText}) {
         auto label = text.Text();
         frame.texts.push_back(
             {std::wstring(label.begin(), label.end()),
@@ -7644,7 +7890,9 @@ void ArrangeWidgetPreview(WidgetPreviewFrame& frame,
     frame.width = layout.width;
     frame.height = layout.height;
     for (size_t i = 0; i < frame.texts.size(); ++i) {
-        frame.texts[i].bounds = layout.cells[i];
+        frame.texts[i].bounds = i < layout.cells.size()
+                                    ? layout.cells[i]
+                                    : layout.netCells[i - layout.cells.size()];
     }
     auto now = SampleTime::clock::now();
     for (size_t i = 0; i < frame.graphs.size(); ++i) {
@@ -8943,6 +9191,7 @@ void CloseMetricSources() {
     g_gpuTemperatureRetry = {};
     g_hwInfoSharedMemoryCache = {};
     g_hwInfoGadgetRegistryCache = {};
+    g_networkCounters = {};
     g_nextPdhCounterRetry = {};
     g_nextPdhRecovery = {};
     g_consecutivePdhReadFailures = 0;

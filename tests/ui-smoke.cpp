@@ -419,6 +419,47 @@ int wmain(int argc, wchar_t** argv) {
             SetWindowPos(child, nullptr, 0, 0, 520, 64, SWP_NOZORDER | SWP_NOACTIVATE);
             if (!InjectWidget(frame)) throw std::runtime_error("Post-dock injection failed");
         }
+        // Exercise real XAML cells with the optional column in both units,
+        // every layout, and after disabling it again.
+        {
+            auto network = std::make_shared<ModSettings>(*initialSettings);
+            network->showNetwork = true; g_settings = network;
+            frame.Width(1800); root.Width(1800); frame.Height(48); root.Height(48);
+            frame.Measure(Size{1800,48}); frame.Arrange(Rect{0,0,1800,48});
+            frame.UpdateLayout(); Pump();
+            for (bool bits : {false, true}) {
+                network->networkBits = bits; ApplyWidgetSettings();
+                MetricsSnapshot sample; sample.capturedAt = SampleTime::clock::now();
+                sample.netAvailable = true; sample.netDownBytes = 125000000;
+                sample.netUpBytes = 1536; PublishMetrics(sample); UpdateWidgetText(true);
+                for (auto mode : {WidgetLayoutMode::Full, WidgetLayoutMode::NoGraphs,
+                                  WidgetLayoutMode::CompactTwoRows, WidgetLayoutMode::CompactOneRow}) {
+                    auto layout = BuildWidgetLayout(*network, MeasureWidgetFont(*network), mode, 48);
+                    ApplyWidgetGeometry(*network, layout);
+                    g_widgetHost.Width(layout.width); g_widgetHost.Height(layout.height);
+                    g_widgetHost.Visibility(Visibility::Visible);
+                    g_widget.Measure(Size{static_cast<float>(layout.width), static_cast<float>(layout.height)});
+                    g_widget.Arrange(Rect{0, 0, static_cast<float>(layout.width), static_cast<float>(layout.height)});
+                    g_widget.UpdateLayout();
+                    for (auto text : {g_netDownText, g_netUpText}) {
+                        if (text.Text() == L"--" || text.ActualWidth() <= 0 ||
+                            text.DesiredSize().Width > Controls::Primitives::LayoutInformation::GetLayoutSlot(text).Width + 1)
+                        { std::wcout << L"NETWORK fail mode=" << int(mode) << L" text=" << text.Text().c_str() << L" actual=" << text.ActualWidth() << L" desired=" << text.DesiredSize().Width << L" slot=" << Controls::Primitives::LayoutInformation::GetLayoutSlot(text).Width << L"\n";
+                            throw std::runtime_error("Network value is missing or clipped"); }
+                    }
+                    CaptureWidgetPreviewContext capture; CaptureWidgetPreview(&capture);
+                    auto& preview = capture.frame;
+                    ArrangeWidgetPreview(preview, layout, *network);
+                    if (preview.texts.size() != 16 || preview.texts[13].bounds.Width <= 0)
+                        throw std::runtime_error("Network preview lost rate cells");
+                }
+            }
+            network->showNetwork = false; ApplyWidgetSettings();
+            if (g_netRows[0].Visibility() != Visibility::Collapsed || g_widgetLayout->net != 0)
+                throw std::runtime_error("Disabled network column retains space");
+            g_settings = initialSettings; ApplyWidgetSettings();
+            std::wcout << L"PASS: optional network XAML cells, units, layouts, preview and disable\n";
+        }
         struct Scenario { PCWSTR name; int width; int height; int font; bool light; bool unavailable; };
         const Scenario cases[] = {
             {L"dark-410x48.png", 410, 48, 11, false, false},
@@ -1077,7 +1118,7 @@ int wmain(int argc, wchar_t** argv) {
         g_moveEditor->target.geometry = {1920, 48, {}, true};
         g_moveEditor->candidate = {500, 410, 0};
         RefreshMovePreviewVisual(); RenderMovePreview();
-        if (!g_moveEditor->visual.ready || g_moveEditor->visual.texts.size() != 12 ||
+        if (!g_moveEditor->visual.ready || g_moveEditor->visual.texts.size() != 16 ||
             g_moveEditor->visual.graphs.size() != 2 || g_moveEditor->visual.bars.size() != 4)
             throw std::runtime_error("Move preview does not contain the real widget content");
         auto usageSlot = Controls::Primitives::LayoutInformation::GetLayoutSlot(g_cpuUsageText);

@@ -105,6 +105,7 @@ $compilerArguments = @(
     '-lcomctl32'
     '-lgdi32'
     '-lgdiplus'
+    '-liphlpapi'
 )
 
 Push-Location $compilerWorkingDirectory

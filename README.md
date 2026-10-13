@@ -239,8 +239,9 @@ backed by system RAM and is not a fixed VRAM chip capacity. If a driver or an
 older low-memory card is detected incorrectly, set the memory type explicitly.
 
 The mod reads system information. It does not control clocks, fans, power limits
-or GPU settings. It does not collect network/disk activity, send telemetry or
-make internet requests.
+or GPU settings. Network rates come from local Windows interface counters,
+summed over connected physical adapters; no traffic is inspected. The mod does
+not collect disk activity, send telemetry or make internet requests.
 
 ## Temperature providers
 
@@ -329,6 +330,8 @@ distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
 | **Reserved space gap** | Gap after a reservation. Range: 0-100 logical pixels; default: 8; effective minimum: 6. |
 | **Update interval** | Collection interval, 1-10 seconds; default: 1. |
 | **Graph history** | CPU/GPU history, 15-180 seconds; default: 60. |
+| **Show network speed** | Off by default. Adds download and upload rates after RAM/VRAM. The widget grows by this column's measured width, in addition to Widget width. |
+| **Network speed unit** | Bytes per second (1024-based KB/s, MB/s, GB/s; default) or bits per second (1000-based Kbps, Mbps, Gbps). |
 
 ### Appearance
 

@@ -165,7 +165,7 @@ def main() -> int:
     assert metadata.get("description:uk-UA")
 
     settings = parse_settings(extract_block(source, "WindhawkModSettings"))
-    assert len(settings) == 29, f"Expected 29 settings, got {len(settings)}"
+    assert len(settings) == 31, f"Expected 31 settings, got {len(settings)}"
     assert next(item for item in settings if "moveHotkey" in item)["moveHotkey"] == ""
 
     setting_keys: set[str] = set()
@@ -189,6 +189,18 @@ def main() -> int:
 
     adaptive_colors = next(item for item in settings if "adaptiveColors" in item)
     assert adaptive_colors["adaptiveColors"] is True
+
+    show_network = next(item for item in settings if "showNetwork" in item)
+    assert show_network["showNetwork"] is False
+
+    network_unit = next(item for item in settings if "networkUnit" in item)
+    assert network_unit["networkUnit"] == "bytes"
+    for options_key in ("$options", "$options:uk-UA"):
+        options = network_unit.get(options_key)
+        assert isinstance(options, list), f"networkUnit.{options_key} missing"
+        assert {
+            str(next(iter(option))) for option in options if isinstance(option, dict)
+        } == {"bytes", "bits"}
 
     gpu_memory_mode = next(item for item in settings if "gpuMemoryMode" in item)
     assert gpu_memory_mode["gpuMemoryMode"] == "auto"

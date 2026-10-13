@@ -14,7 +14,7 @@ try {
         '-DWH_MOD' '-DWH_EDITING' '-DWIN32_LEAN_AND_MEAN' `
         '-DWINVER=0x0A00' '-D_WIN32_WINNT=0x0A00' '-D_WIN32_IE=0x0A00' `
         '-target' 'x86_64-w64-mingw32' $source '-o' $output `
-        '-lole32' '-loleaut32' '-lruntimeobject' '-lpdh' '-ldxgi' '-lcomctl32' '-lgdi32' '-lgdiplus'
+        '-lole32' '-loleaut32' '-lruntimeobject' '-lpdh' '-ldxgi' '-lcomctl32' '-lgdi32' '-lgdiplus' '-liphlpapi'
     if ($LASTEXITCODE -ne 0) { throw "UI smoke build failed: $LASTEXITCODE" }
 } finally {
     Pop-Location

@@ -2,6 +2,9 @@
 // included unchanged below; no test switches or synthetic fixtures ship in it.
 #pragma once
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2ipdef.h>
+#include <iphlpapi.h>
 #include <dxgi.h>
 #include <pdh.h>
 #include <pdhmsg.h>
@@ -15,6 +18,21 @@
 #include <windhawk_api.h>
 
 namespace fake {
+inline std::vector<MIB_IF_ROW2> networkRows;
+inline bool networkError = false;
+inline int networkAllocations = 0, networkFrees = 0;
+inline NETIO_STATUS WINAPI NetworkTable(MIB_IF_TABLE2** output) {
+    *output = nullptr;
+    if (networkError) return ERROR_NOT_SUPPORTED;
+    size_t size = sizeof(MIB_IF_TABLE2) + networkRows.size() * sizeof(MIB_IF_ROW2);
+    auto* table = static_cast<MIB_IF_TABLE2*>(std::calloc(1, size));
+    if (!table) return ERROR_NOT_ENOUGH_MEMORY;
+    table->NumEntries = static_cast<ULONG>(networkRows.size());
+    std::copy(networkRows.begin(), networkRows.end(), table->Table);
+    *output = table; ++networkAllocations;
+    return NO_ERROR;
+}
+inline void WINAPI FreeNetworkTable(void* table) { std::free(table); ++networkFrees; }
 struct Query { bool closed = false; bool fail = false; int collects = 0; };
 struct Counter { Query* query; std::wstring path; };
 inline std::vector<std::unique_ptr<Query>> queries;
@@ -213,3 +231,6 @@ inline BOOL SetLocalString(PCWSTR key, PCWSTR value) {
 
 #define Wh_GetStringValue fake::GetLocalString
 #define Wh_SetStringValue fake::SetLocalString
+
+#define GetIfTable2 fake::NetworkTable
+#define FreeMibTable fake::FreeNetworkTable
