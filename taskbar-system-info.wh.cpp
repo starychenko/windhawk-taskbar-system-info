@@ -4,7 +4,7 @@
 // @name:uk-UA      Системний монітор панелі завдань
 // @description     CPU, GPU, RAM and VRAM on the Windows 11 taskbar, with temperatures, history graphs, adaptive layouts and live dragging.
 // @description:uk-UA CPU, GPU, RAM і VRAM на панелі завдань Windows 11: температури, графіки історії, адаптивні макети та перетягування живого віджета.
-// @version         1.8.0
+// @version         1.8.1
 // @author          Yevhenii Starychenko
 // @github          https://github.com/starychenko
 // @homepage        https://github.com/starychenko/windhawk-taskbar-system-info
@@ -254,6 +254,14 @@ fits; a rejected expansion restores the original margin. Root padding and
 borders are excluded from the usable area. Taskbar Styler themes can target
 `Grid#WindhawkTaskbarSystemInfo`; adaptive scaling uses an inner `Viewbox`.
 
+When a theme assigns that Grid to a column, narrows its column span or changes
+its alignment, the theme controls placement. The mod sizes the inner content
+within that slot and keeps the theme's `Auto` dimensions, margin and padding.
+Space reservation and the move editor do not override that placement. Removing
+those styles restores automatic placement and saved position preferences.
+Square borders using WindhawkBlur use a clipped native Border while keeping
+the theme's brush, border thickness and zero corner radius.
+
 Left and centered taskbar alignment use the same placement map. Separately drawn
 items or windows from another taskbar mod may need manual positioning or a
 compatibility fix. A particular Taskbar Styler preset still needs a live check.
@@ -444,7 +452,7 @@ placement errors and sensor mismatches. It does not print every sample.
 
 ## Compatibility
 
-The current source is **1.8.0**, built with Windhawk **1.7.3** for Windows 11.
+The current source is **1.8.1**, built with Windhawk **1.7.3** for Windows 11.
 The widget targets horizontal primary and secondary taskbars. x64 and ARM64
 builds pass; ARM64 hardware has not been checked.
 
@@ -743,6 +751,7 @@ Released under [GPL-3.0](https://github.com/starychenko/windhawk-taskbar-system-
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.UI.Text.h>
+#include <winrt/Windows.UI.Composition.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
@@ -5116,6 +5125,116 @@ struct WidgetPlacement {
     TaskbarPlacement placement;
     WidgetLayout layout;
 };
+struct WidgetHostLayoutState {
+    bool themed = false;
+    std::optional<double> width, height;
+    std::optional<Thickness> margin;
+};
+WidgetHostLayoutState g_hostLayoutState;
+
+// Square XAML borders use a hollow CompositionNineGridBrush. A backdrop
+// effect used as its source can disappear even though assignment succeeds.
+// Use the native rounded-border path, expanded one DIP outside the host and
+// clipped back to its square bounds. The corner curves stay outside the clip;
+// deflating by thickness + 1 preserves the exact square inner border too.
+// Keep the public Grid properties intact so Styler can update/remove them.
+void UpdateWidgetCompositionBorder(Grid host) {
+    if (host.Children().Size() < 2) return;
+    auto layer = host.Children().GetAt(1).as<Canvas>();
+    auto border = layer.Children().GetAt(0).as<Border>();
+    auto brush = host.BorderBrush();
+    auto radius = host.CornerRadius();
+    auto thickness = host.BorderThickness();
+    bool square = radius.TopLeft == 0 && radius.TopRight == 0 &&
+                  radius.BottomLeft == 0 && radius.BottomRight == 0;
+    bool effect = false;
+    if (square && brush &&
+        thickness.Left + thickness.Top + thickness.Right + thickness.Bottom > 0) {
+        if (auto composition = brush.try_as<Media::IXamlCompositionBrushBaseProtected>()) {
+            auto nativeBrush = composition.CompositionBrush();
+            if (auto nativeEffect = nativeBrush.try_as<Windows::UI::Composition::CompositionEffectBrush>()) {
+                // WindhawkBlur's backdrop source is the affected case. Other
+                // effects and native solid/surface borders keep native drawing.
+                try {
+                    effect = nativeEffect.GetSourceParameter(L"backdrop")
+                                 .try_as<Windows::UI::Composition::CompositionBackdropBrush>() != nullptr;
+                } catch (const winrt::hresult_error&) {}
+            }
+        }
+    }
+    if (!effect || host.ActualWidth() <= 0 || host.ActualHeight() <= 0) {
+        if (layer.Visibility() != Visibility::Collapsed) layer.Visibility(Visibility::Collapsed);
+        if (border.BorderBrush()) border.BorderBrush(nullptr);
+        return;
+    }
+    double width = host.ActualWidth(), height = host.ActualHeight();
+    if (!(std::abs(border.Width() - width - 2) < .01)) border.Width(width + 2);
+    if (!(std::abs(border.Height() - height - 2) < .01)) border.Height(height + 2);
+    Thickness expanded{thickness.Left + 1, thickness.Top + 1,
+                       thickness.Right + 1, thickness.Bottom + 1};
+    if (border.BorderThickness() != expanded) border.BorderThickness(expanded);
+    auto clip = border.Clip().as<RectangleGeometry>();
+    Rect bounds{1, 1, static_cast<float>(width), static_cast<float>(height)};
+    if (clip.Rect() != bounds) clip.Rect(bounds);
+    auto padding = host.Padding();
+    double left = -padding.Left - thickness.Left - 1;
+    double top = -padding.Top - thickness.Top - 1;
+    if (!(std::abs(Canvas::GetLeft(border) - left) < .01)) Canvas::SetLeft(border, left);
+    if (!(std::abs(Canvas::GetTop(border) - top) < .01)) Canvas::SetTop(border, top);
+    if (border.BorderBrush() != brush) border.BorderBrush(brush);
+    if (layer.Visibility() != Visibility::Visible) layer.Visibility(Visibility::Visible);
+}
+
+struct WidgetBorderSubscriptions {
+    std::optional<int64_t> brush, radius;
+};
+WidgetBorderSubscriptions g_borderSubscriptions;
+#ifdef WH_TASKBAR_COORDINATOR_TEST
+void (*g_borderRevokeTestHook)(DependencyProperty const&) = nullptr;
+#endif
+
+bool UnregisterWidgetBorderCallbacks(Grid host, WidgetBorderSubscriptions& tokens) {
+    bool removed = true;
+    auto revoke = [&](DependencyProperty property, std::optional<int64_t>& token) {
+        if (!token) return;
+        try {
+#ifdef WH_TASKBAR_COORDINATOR_TEST
+            if (g_borderRevokeTestHook) g_borderRevokeTestHook(property);
+#endif
+            host.UnregisterPropertyChangedCallback(property, *token);
+            token.reset();
+        } catch (...) {
+            Wh_Log(L"Removing widget border callback failed: %08X",
+                   static_cast<unsigned>(winrt::to_hresult()));
+            removed = false;
+        }
+    };
+    revoke(Grid::BorderBrushProperty(), tokens.brush);
+    revoke(Grid::CornerRadiusProperty(), tokens.radius);
+    return removed;
+}
+
+void RegisterWidgetBorderCallbacks(Grid host, WidgetBorderSubscriptions& tokens) {
+    // These properties invalidate rendering, not layout. The dependency
+    // property callback already runs on the host's UI thread. It updates only
+    // our child layer, without capturing the host or its owning controller.
+    auto changed = [](DependencyObject const& sender, DependencyProperty const&) {
+        if (g_unloading) return;
+        try {
+            UpdateWidgetCompositionBorder(sender.as<Grid>());
+        } catch (...) {
+            Wh_Log(L"Updating widget border failed: %08X",
+                   static_cast<unsigned>(winrt::to_hresult()));
+        }
+    };
+    try {
+        tokens.brush = host.RegisterPropertyChangedCallback(Grid::BorderBrushProperty(), changed);
+        tokens.radius = host.RegisterPropertyChangedCallback(Grid::CornerRadiusProperty(), changed);
+    } catch (...) {
+        UnregisterWidgetBorderCallbacks(host, tokens);
+        throw;
+    }
+}
 WidgetPlacement ResolveWidgetPlacement(const ModSettings& settings,
                                        const TaskbarGeometry& geometry,
                                        PreferredPosition preferred,
@@ -5375,18 +5494,19 @@ std::optional<ReservationInputs> g_lastReservationInputs;
 // A content-sized dock has no free gap until reserving space grows its frame.
 // Only propose a bounded trial here; the next arranged XAML pass must prove it
 // fits before the widget becomes visible. Never change the theme's own widths.
-double AutoSizedDockAvailableWidth() {
-    auto frame = VisualTreeHelper::GetParent(g_rootGrid).try_as<FrameworkElement>();
-    auto xaml = g_rootGrid.XamlRoot();
-    if (!frame || !xaml || !g_taskItemsRepeater ||
-        !std::isnan(g_rootGrid.Width()) || !std::isnan(frame.Width()) ||
-        (g_rootGrid.HorizontalAlignment() == HorizontalAlignment::Stretch &&
+double AutoSizedDockAvailableWidthFor(Grid root, FrameworkElement repeater,
+                                     bool themePlaced = false) {
+    auto frame = VisualTreeHelper::GetParent(root).try_as<FrameworkElement>();
+    auto xaml = root.XamlRoot();
+    if (!frame || !xaml || !repeater ||
+        !std::isnan(root.Width()) || !std::isnan(frame.Width()) ||
+        (!themePlaced && root.HorizontalAlignment() == HorizontalAlignment::Stretch &&
          frame.HorizontalAlignment() == HorizontalAlignment::Stretch)) {
         return 0;
     }
-    auto rootMargin = g_rootGrid.Margin();
+    auto rootMargin = root.Margin();
     auto frameMargin = frame.Margin();
-    auto insets = TaskbarContentInsets(g_rootGrid);
+    auto insets = TaskbarContentInsets(root);
     double available = xaml.Size().Width;
     if (auto parent = VisualTreeHelper::GetParent(frame).try_as<FrameworkElement>()) {
         auto parentInsets = TaskbarContentInsets(parent);
@@ -5402,9 +5522,193 @@ double AutoSizedDockAvailableWidth() {
     double limit = std::min({
         available - std::max(0.0, frameMargin.Left) -
             std::max(0.0, frameMargin.Right) - frameToContent,
-        g_rootGrid.MaxWidth() - rootInsetsWidth,
+        root.MaxWidth() - rootInsetsWidth,
         frame.MaxWidth() - frameToContent});
     return std::isfinite(limit) ? std::max(0.0, limit) : 0;
+}
+double AutoSizedDockAvailableWidth() {
+    return AutoSizedDockAvailableWidthFor(g_rootGrid, g_taskItemsRepeater);
+}
+
+bool ThemePlacesWidget(Grid root, Grid host) {
+    return Grid::GetColumn(host) != 0 ||
+           Grid::GetColumnSpan(host) <
+               std::max(1, static_cast<int>(root.ColumnDefinitions().Size())) ||
+           host.HorizontalAlignment() != HorizontalAlignment::Left ||
+           host.VerticalAlignment() != VerticalAlignment::Center;
+}
+
+// A theme's Grid.Column/ColumnSpan is a real layout slot, not an offset in the
+// taskbar-wide overlay coordinate system. Let that slot own the outer Grid;
+// only size its inner Viewbox. In particular, Auto remains Auto in Styler.
+void SetWidgetLayoutOwner(Grid host, WidgetHostLayoutState& state, bool themed) {
+    if (state.themed == themed) return;
+    state.themed = themed;
+    auto scaler = host.Children().GetAt(0).as<Viewbox>();
+    if (themed) {
+        if (state.width && std::abs(host.Width() - *state.width) < .01)
+            host.ClearValue(FrameworkElement::WidthProperty());
+        if (state.height && std::abs(host.Height() - *state.height) < .01)
+            host.ClearValue(FrameworkElement::HeightProperty());
+        if (state.margin && host.Margin() == *state.margin)
+            host.ClearValue(FrameworkElement::MarginProperty());
+    } else {
+        scaler.ClearValue(FrameworkElement::WidthProperty());
+        scaler.ClearValue(FrameworkElement::HeightProperty());
+    }
+    state.width.reset(); state.height.reset(); state.margin.reset();
+}
+
+std::vector<double> MeasureThemedColumns(Grid root, Grid host) {
+    auto columns = root.ColumnDefinitions();
+    int count = static_cast<int>(columns.Size());
+    std::vector<double> widths(count);
+    if (!count) return widths;
+    int first = std::min(Grid::GetColumn(host), count - 1);
+    int end = first + std::min(Grid::GetColumnSpan(host), count - first);
+    for (int i = 0; i < count; ++i) {
+        auto column = columns.GetAt(i);
+        auto length = column.Width();
+        widths[i] = std::max(column.MinWidth(),
+            length.GridUnitType == GridUnitType::Pixel
+                ? std::min(length.Value, column.MaxWidth()) :
+            length.GridUnitType == GridUnitType::Auto ? column.ActualWidth() : 0);
+    }
+    // In Explorer, Styler can replace ColumnDefinitions while their public
+    // ActualWidth values remain zero even after the children are arranged.
+    // Account for real siblings too. Overlays in the same column contribute
+    // only their maximum width; spanning children contribute only the deficit.
+    struct Demand { int first, end; double width; };
+    std::vector<Demand> demands;
+    for (auto child : root.Children()) {
+        auto element = child.try_as<FrameworkElement>();
+        if (!element || element == host ||
+            element.Visibility() == Visibility::Collapsed) continue;
+        int childFirst = std::min(Grid::GetColumn(element), count - 1);
+        int childEnd = childFirst + std::min(Grid::GetColumnSpan(element), count - childFirst);
+        if (childFirst < end && childEnd > first) continue;
+        auto margin = element.Margin();
+        double required = element.ActualWidth() +
+            std::max(0.0, margin.Left) + std::max(0.0, margin.Right);
+        if (std::isfinite(required) && required > 0)
+            demands.push_back({childFirst, childEnd, required});
+    }
+    std::sort(demands.begin(), demands.end(), [](const auto& a, const auto& b) {
+        return a.end - a.first < b.end - b.first;
+    });
+    for (const auto& demand : demands) {
+        double accounted = 0;
+        for (int i = demand.first; i < demand.end; ++i) accounted += widths[i];
+        widths[demand.first] += std::max(0.0, demand.width - accounted);
+    }
+    return widths;
+}
+
+void AllocateThemedStarColumns(Grid root, double available, std::vector<double>& widths) {
+    auto columns = root.ColumnDefinitions();
+    double arranged = 0;
+    for (auto column : columns) arranged += column.ActualWidth();
+    // Use the native allocation when it accounts for the whole bounded Grid.
+    // A growing Auto dock or replaced (zero-width) definitions need a fallback.
+    if (available > 0 && std::abs(arranged - available) < .25) {
+        for (uint32_t i = 0; i < columns.Size(); ++i)
+            widths[i] = columns.GetAt(i).ActualWidth();
+        return;
+    }
+    struct Star { size_t index; double weight, minimum, maximum; };
+    std::vector<Star> stars;
+    double maxWeight = 0, minimum = 0, maximum = 0;
+    for (uint32_t i = 0; i < columns.Size(); ++i) {
+        auto column = columns.GetAt(i);
+        auto length = column.Width();
+        if (length.GridUnitType != GridUnitType::Star) { available -= widths[i]; continue; }
+        double low = column.MinWidth(), high = std::max(low, column.MaxWidth());
+        // A zero-weight Star only contributes its minimum.
+        if (length.Value == 0) high = low;
+        stars.push_back({i, length.Value, low, high});
+        maxWeight = std::max(maxWeight, length.Value);
+        minimum += low; maximum += high;
+    }
+    available = std::clamp(available, minimum, maximum);
+    for (auto& star : stars) star.weight = maxWeight > 0 ? star.weight / maxWeight : 0;
+    auto used = [&](double unit) {
+        double sum = 0;
+        for (auto const& star : stars)
+            sum += std::clamp(unit * star.weight, star.minimum, star.maximum);
+        return sum;
+    };
+    double low = 0, high = std::max(1.0, available);
+    while (used(high) < available && high < std::numeric_limits<double>::max() / 2)
+        high *= 2;
+    for (int pass = 0; pass < 56; ++pass) {
+        double mid = low + (high - low) / 2;
+        if (used(mid) < available) low = mid;
+        else high = mid;
+    }
+    for (auto const& star : stars)
+        widths[star.index] = std::clamp(high * star.weight, star.minimum, star.maximum);
+}
+
+WidgetPlacement ResolveThemedWidget(Grid root, FrameworkElement repeater,
+                                    Grid host, const ModSettings& settings,
+                                    const WidgetFontMetrics& font) {
+    auto rootInsets = TaskbarContentInsets(root);
+    double width = root.ActualWidth() - rootInsets.Left - rootInsets.Right;
+    // A theme can put a stretched frame in an ancestor's Auto column. Its
+    // current width then includes our content and cannot be the growth limit.
+    if (double capacity = AutoSizedDockAvailableWidthFor(root, repeater, true); capacity > 0)
+        width = capacity;
+    width = std::min(width, root.MaxWidth() - rootInsets.Left - rootInsets.Right);
+    auto columns = root.ColumnDefinitions();
+    if (columns.Size()) {
+        auto columnWidths = MeasureThemedColumns(root, host);
+        int first = std::min(Grid::GetColumn(host), static_cast<int>(columns.Size()) - 1);
+        int end = std::min(first + Grid::GetColumnSpan(host), static_cast<int>(columns.Size()));
+        bool starSlot = false;
+        for (int i = first; i < end; ++i)
+            starSlot |= columns.GetAt(i).Width().GridUnitType == GridUnitType::Star;
+        if (starSlot) AllocateThemedStarColumns(root, std::max(0.0, width), columnWidths);
+        double fixedSlot = 0;
+        bool flexibleSlot = false;
+        for (int i = 0; i < static_cast<int>(columns.Size()); ++i) {
+            auto column = columns.GetAt(i);
+            auto length = column.Width();
+            if (i >= first && i < end) {
+                fixedSlot += columnWidths[i];
+                flexibleSlot |= length.GridUnitType != GridUnitType::Pixel;
+            } else {
+                // Empty star space can be reused; actual sibling content cannot.
+                width -= columnWidths[i];
+            }
+        }
+        if (!flexibleSlot || starSlot) width = std::min(width, fixedSlot);
+    }
+    auto margin = host.Margin();
+    width -= std::max(0.0, margin.Left) + std::max(0.0, margin.Right);
+    double height = root.ActualHeight() - rootInsets.Top - rootInsets.Bottom -
+                    std::max(0.0, margin.Top) - std::max(0.0, margin.Bottom);
+    if (std::isfinite(host.Width())) width = std::min(width, host.Width());
+    if (std::isfinite(host.Height())) height = std::min(height, host.Height());
+    width = std::min(width, host.MaxWidth());
+    height = std::min(height, host.MaxHeight());
+    auto insets = TaskbarContentInsets(host);
+    width -= insets.Left + insets.Right;
+    height -= insets.Top + insets.Bottom;
+    // Clearance outside this content box belongs to the theme's margin and
+    // padding. Keep the existing adaptive solver without adding it twice.
+    TaskbarGeometry available{std::max(0.0, width) + 2 * kTaskbarClearance,
+                              std::max(0.0, height), {}, width > 0 && height > 0};
+    return ResolveWidgetPlacement(settings, available, {}, font, false);
+}
+
+void SizeThemedWidget(Grid host, const WidgetPlacement& resolved) {
+    auto scaler = host.Children().GetAt(0).as<Viewbox>();
+    double width = resolved.placement.width;
+    double height = resolved.layout.height * resolved.layout.scale;
+    if (!(std::abs(scaler.Width() - width) < .01)) scaler.Width(width);
+    if (!(std::abs(scaler.Height() - height) < .01)) scaler.Height(height);
+    auto visibility = width > 0 ? Visibility::Visible : Visibility::Collapsed;
+    if (host.Visibility() != visibility) host.Visibility(visibility);
 }
 std::optional<TaskbarPlacement> AutoSizedDockReservation(
     const ModSettings& settings, const TaskbarGeometry& geometry,
@@ -5437,6 +5741,22 @@ void ApplyTaskbarPlacement(const ModSettings& settings) {
     struct Guard {
         ~Guard() { g_applyingTaskbarPlacement = false; }
     } guard;
+    UpdateWidgetCompositionBorder(g_widgetHost);
+    bool themed = ThemePlacesWidget(g_rootGrid, g_widgetHost);
+    bool ownerChanged = themed != g_hostLayoutState.themed;
+    SetWidgetLayoutOwner(g_widgetHost, g_hostLayoutState, themed);
+    if (ownerChanged && !themed) {
+        // The themed Auto-sized host may itself have grown the dock. Remove
+        // that contribution and measure a fresh baseline before reserving;
+        // its old column offset is not space created by our button margin.
+        g_widgetHost.Visibility(Visibility::Collapsed);
+        g_reservationRejected = false;
+        g_lastPlacementInputs.reset();
+        g_lastReservationInputs.reset();
+        g_reservationAwaitingLayout = true;
+        g_reservationRevision = g_layoutRevision;
+        return;
+    }
     Thickness margin{};
     bool ownMargin = false;
     if (g_taskItemsRepeater) {
@@ -5449,6 +5769,20 @@ void ApplyTaskbarPlacement(const ModSettings& settings) {
         } else if (g_reservedMargin != 0) {
             g_reservedMargin = 0;
         }
+    }
+    if (themed) {
+        if (ownMargin && g_reservedMargin != 0) g_taskItemsRepeater.Margin(margin);
+        g_reservedMargin = 0;
+        g_lastAppliedRepeaterMarginLeft.reset();
+        g_dockReservationTrial.reset();
+        g_dockReservationActive = false;
+        g_reservationRejected = false;
+        g_lastPlacementInputs.reset();
+        auto resolved = ResolveThemedWidget(g_rootGrid, g_taskItemsRepeater,
+            g_widgetHost, settings, MeasureWidgetFont(settings));
+        ApplyWidgetGeometry(settings, resolved.layout);
+        SizeThemedWidget(g_widgetHost, resolved);
+        return;
     }
     auto geometry = MeasureTaskbarGeometry(g_rootGrid, g_taskItemsRepeater,
                                            ownMargin ? g_reservedMargin : 0.0,
@@ -5596,6 +5930,9 @@ void ApplyTaskbarPlacement(const ModSettings& settings) {
         std::abs(g_widgetHost.Width() - placement.width) > 0.01) {
         g_widgetHost.Width(placement.width);
     }
+    // Styler may restore the exact numeric value captured before its theme.
+    // Ownership still matters even when no dependency-property write is needed.
+    g_hostLayoutState.width = g_widgetHost.Width();
     double height = std::isfinite(geometry.height) && geometry.height > 0
                         ? std::min(resolved.layout.height, geometry.height)
                         : resolved.layout.height;
@@ -5603,9 +5940,12 @@ void ApplyTaskbarPlacement(const ModSettings& settings) {
         std::abs(g_widgetHost.Height() - height) > 0.01) {
         g_widgetHost.Height(height);
     }
+    g_hostLayoutState.height = g_widgetHost.Height();
     if (std::abs(g_widgetHost.Margin().Left - placement.left) > 0.01) {
         g_widgetHost.Margin(Thickness{placement.left, 0, 0, 0});
     }
+    if (g_widgetHost.Margin() == Thickness{placement.left, 0, 0, 0})
+        g_hostLayoutState.margin = g_widgetHost.Margin();
     g_previousPlacementLeft = placement.left;
     if (g_taskItemsRepeater) {
         double base = margin.Left;
@@ -5844,8 +6184,8 @@ HWND FindPrimaryTaskbarWindow();
 bool IsCurrentProcessTaskbarWindow(HWND window, bool* secondary);
 
 void SyncWidgetCopies();
-void RemoveWidgetCopy(HWND window);
-void RemoveWidgetCopyFromRoot(Grid root);
+bool RemoveWidgetCopy(HWND window);
+bool RemoveWidgetCopyFromRoot(Grid root);
 bool RemoveAllWidgetCopies();
 
 void RefreshTaskbarUi(bool refreshSystemState = true) {
@@ -6173,6 +6513,8 @@ Grid CreateNetworkRow(PCWSTR label,
 
 bool RemoveWidget() {
     RemovePlacementControl();
+    if (g_widgetHost && !UnregisterWidgetBorderCallbacks(g_widgetHost, g_borderSubscriptions))
+        return false;
     if (g_widget && g_actualThemeChangedToken.value) {
         try {
             g_widget.ActualThemeChanged(g_actualThemeChangedToken);
@@ -6243,6 +6585,7 @@ bool RemoveWidget() {
     // Font bounds and capacity budgets are plain values. Retain them across
     // taskbar transfers; a changed font or total invalidates the cache normally.
     g_widgetHost = nullptr;
+    g_hostLayoutState = {};
     g_rootGrid = nullptr;
     g_taskItemsRepeater = nullptr;
     g_systemTrayFrame = nullptr;
@@ -6307,6 +6650,16 @@ WidgetElements CreateWidgetElements(Grid root) {
     scaler.StretchDirection(StretchDirection::DownOnly);
     scaler.Child(widget);
     host.Children().Append(scaler);
+    Canvas borderLayer;
+    borderLayer.IsHitTestVisible(false);
+    borderLayer.Visibility(Visibility::Collapsed);
+    Canvas::SetZIndex(borderLayer, 1);
+    Border border;
+    border.IsHitTestVisible(false);
+    border.CornerRadius({1, 1, 1, 1});
+    border.Clip(RectangleGeometry{});
+    borderLayer.Children().Append(border);
+    host.Children().Append(borderLayer);
     Canvas::SetZIndex(host, 10000);
     Grid::SetColumn(host, 0);
     Grid::SetColumnSpan(host,
@@ -6362,7 +6715,7 @@ bool InjectWidget(FrameworkElement taskbarFrame) {
         return false;
     }
 
-    RemoveWidgetCopyFromRoot(root);
+    if (!RemoveWidgetCopyFromRoot(root)) return false;
     auto children = root.Children();
     for (uint32_t index = 0; index < children.Size();) {
         auto element = children.GetAt(index).try_as<FrameworkElement>();
@@ -6428,6 +6781,7 @@ bool InjectWidget(FrameworkElement taskbarFrame) {
     g_rootGrid = root;
     g_widget = widget;
     g_widgetHost = host;
+    RegisterWidgetBorderCallbacks(host, g_borderSubscriptions);
     g_taskItemsRepeater =
         FindDirectChildByName(root, L"TaskbarFrameRepeater");
     FrameworkElement searchRoot = taskbarFrame;
@@ -6988,6 +7342,8 @@ struct SecondaryWidget {
     WidgetElements view;
     TaskbarGeometryCache geometryCache;
     std::optional<WidgetLayout> layout;
+    WidgetHostLayoutState hostLayout;
+    WidgetBorderSubscriptions borderSubscriptions;
     std::shared_ptr<const WidgetPresentation> model;
     std::shared_ptr<const ModSettings> settings;
     std::array<SolidColorBrush, 3> palette{nullptr, nullptr, nullptr};
@@ -6995,6 +7351,7 @@ struct SecondaryWidget {
     event_token layoutToken{}, themeToken{};
     ElementTheme theme = ElementTheme::Default;
     bool queued = false, updating = false, styled = false, highContrast = false;
+    bool cleanupPending = false;
     double previousLeft = 0;
 };
 std::mutex g_copyWindowsMutex;
@@ -7021,14 +7378,19 @@ void QueueCopyUpdate(HWND window) {
     }
 }
 void UpdateSecondaryWidget(SecondaryWidget& copy, bool refreshValues) {
-    if (copy.updating || !copy.model || !copy.settings) return;
+    if (copy.cleanupPending || copy.updating || !copy.model || !copy.settings) return;
     copy.updating = true;
     struct Guard { bool& flag; ~Guard() { flag = false; } } guard{copy.updating};
     const auto& settings = *copy.settings;
+    UpdateWidgetCompositionBorder(copy.view.host);
+    bool themed = ThemePlacesWidget(copy.root, copy.view.host);
+    SetWidgetLayoutOwner(copy.view.host, copy.hostLayout, themed);
     auto geometry = MeasureTaskbarGeometry(copy.root, copy.repeater, 0, &copy.geometryCache);
-    auto resolved = ResolveWidgetPlacement(settings, geometry,
-        {static_cast<double>(settings.leftOffset), copy.previousLeft, SavedTaskbarFraction(copy.window)},
-        copy.model->font, false);
+    auto resolved = themed
+        ? ResolveThemedWidget(copy.root, copy.repeater, copy.view.host, settings, copy.model->font)
+        : ResolveWidgetPlacement(settings, geometry,
+            {static_cast<double>(settings.leftOffset), copy.previousLeft, SavedTaskbarFraction(copy.window)},
+            copy.model->font, false);
     const auto& layout = resolved.layout;
     const auto& placement = resolved.placement;
     auto visibility = placement.width > 0 ? Visibility::Visible : Visibility::Collapsed;
@@ -7040,11 +7402,24 @@ void UpdateSecondaryWidget(SecondaryWidget& copy, bool refreshValues) {
         copy.layout = layout;
     }
     auto host = copy.view.host;
-    if (!(std::abs(host.Width() - placement.width) < .01)) host.Width(placement.width);
-    double height = std::min(layout.height, geometry.height);
-    if (!(std::abs(host.Height() - height) < .01)) host.Height(height);
-    if (std::abs(host.Margin().Left - placement.left) > .01)
-        host.Margin(Thickness{placement.left, 0, 0, 0});
+    if (themed) {
+        SizeThemedWidget(host, resolved);
+    } else {
+        if (!(std::abs(host.Width() - placement.width) < .01)) {
+            host.Width(placement.width);
+        }
+        copy.hostLayout.width = host.Width();
+        double height = std::min(layout.height, geometry.height);
+        if (!(std::abs(host.Height() - height) < .01)) {
+            host.Height(height);
+        }
+        copy.hostLayout.height = host.Height();
+        if (std::abs(host.Margin().Left - placement.left) > .01) {
+            host.Margin(Thickness{placement.left, 0, 0, 0});
+        }
+        if (host.Margin() == Thickness{placement.left, 0, 0, 0})
+            copy.hostLayout.margin = host.Margin();
+    }
     copy.previousLeft = placement.left;
     auto theme = copy.view.widget.ActualTheme();
     HIGHCONTRASTW contrast{};
@@ -7082,9 +7457,12 @@ void UpdateSecondaryWidget(SecondaryWidget& copy, bool refreshValues) {
         }
     }
 }
-void DetachSecondaryWidget(SecondaryWidget& copy) {
-    // A destroyed island can reject XAML calls. Revoke every subscription and
-    // release the remaining references on this same UI thread regardless.
+bool DetachSecondaryWidget(SecondaryWidget& copy) {
+    copy.cleanupPending = true;
+    // Keep the controller and outstanding tokens if revocation fails, so an
+    // owner-thread retry can finish before removal or promotion is accepted.
+    if (!UnregisterWidgetBorderCallbacks(copy.view.host, copy.borderSubscriptions))
+        return false;
     if (copy.layoutToken.value) {
         auto token = std::exchange(copy.layoutToken, {});
         try { copy.root.LayoutUpdated(token); } catch (...) { Wh_Log(L"Secondary layout source disconnected"); }
@@ -7097,32 +7475,39 @@ void DetachSecondaryWidget(SecondaryWidget& copy) {
         uint32_t index = 0;
         if (copy.root.Children().IndexOf(copy.view.host, index)) copy.root.Children().RemoveAt(index);
     } catch (...) { Wh_Log(L"Secondary island disconnected during removal"); }
+    return true;
 }
 
-void RemoveWidgetCopy(HWND window) {
+bool RemoveWidgetCopy(HWND window) {
     auto* copy = FindWidgetCopy(window);
-    if (!copy) return;
+    if (!copy) return true;
     // All callers marshal to the owning native window first.
-    DetachSecondaryWidget(*copy);
+    if (!DetachSecondaryWidget(*copy)) return false;
     KillTimer(window, kCopySubclass);
     RemoveWindowSubclass(window, CopyWindowProc, kCopySubclass);
     RemovePropW(window, kCopyProperty);
     { std::lock_guard lock(g_copyWindowsMutex); std::erase(g_copyWindows, window); }
     delete copy;
+    return true;
 }
-void RemoveWidgetCopyFromRoot(Grid root) {
+bool RemoveWidgetCopyFromRoot(Grid root) {
+    bool removed = true;
     for (HWND window : CopyWindows()) {
         if (GetWindowThreadProcessId(window, nullptr) != GetCurrentThreadId()) continue;
         auto* copy = FindWidgetCopy(window);
-        if (copy && copy->root == root) RemoveWidgetCopy(window);
+        if (copy && copy->root == root && !RemoveWidgetCopy(window)) removed = false;
     }
+    return removed;
 }
 LRESULT CALLBACK CopyWindowProc(HWND window, UINT message, WPARAM wParam,
                                 LPARAM lParam, UINT_PTR, DWORD_PTR data) {
     auto* copy = reinterpret_cast<SecondaryWidget*>(data);
     try {
         if (message == WM_NCDESTROY) {
-            RemoveWidgetCopy(window);
+            // The HWND is still usable here. Make one bounded owner-thread
+            // retry before its properties and dispatch route disappear.
+            if (!RemoveWidgetCopy(window) && !RemoveWidgetCopy(window))
+                Wh_Log(L"Secondary border cleanup failed before window destruction");
         } else if (message == WM_TIMER && wParam == kCopySubclass) {
             if (!g_unloading) UpdateSecondaryWidget(*copy, true);
             return 0;
@@ -7143,6 +7528,9 @@ std::unique_ptr<SecondaryWidget> CreateSecondaryWidget(HWND window, Grid root) {
     copy->view.host.Visibility(Visibility::Collapsed);
     return copy;
 }
+#ifdef WH_TASKBAR_COORDINATOR_TEST
+void (*g_secondaryAttachTestHook)() = nullptr;
+#endif
 SecondaryWidget* AttachSecondaryWidget(HWND window, Grid root) {
     // Inspect only this owner thread's tree. A fallback primary can already
     // occupy this root before its native taskbar window has been identified.
@@ -7159,9 +7547,13 @@ SecondaryWidget* AttachSecondaryWidget(HWND window, Grid root) {
     auto* copy = created.release();
     try {
         { std::lock_guard lock(g_copyWindowsMutex); g_copyWindows.push_back(window); }
+        RegisterWidgetBorderCallbacks(copy->view.host, copy->borderSubscriptions);
         copy->layoutToken = root.LayoutUpdated([window](auto const&, auto const&) { QueueCopyUpdate(window); });
         copy->themeToken = copy->view.widget.ActualThemeChanged([window](auto const&, auto const&) { QueueCopyUpdate(window); });
         // Expire stale values even if the primary taskbar is rebuilding.
+#ifdef WH_TASKBAR_COORDINATOR_TEST
+        if (g_secondaryAttachTestHook) g_secondaryAttachTestHook();
+#endif
         if (!SetTimer(window, kCopySubclass, 1000, nullptr)) throw hresult_error(E_FAIL);
     } catch (...) {
         RemoveWidgetCopy(window);
@@ -7180,13 +7572,18 @@ struct SyncCopyContext {
 void SyncCopyOnOwner(void* value) {
     auto& context = *static_cast<SyncCopyContext*>(value);
     try {
-        if (context.remove || g_unloading || !context.settings->allMonitors) { RemoveWidgetCopy(context.window); context.succeeded = true; return; }
+        if (context.remove || g_unloading || !context.settings->allMonitors) {
+            context.succeeded = RemoveWidgetCopy(context.window);
+            return;
+        }
         auto frame = FindTaskbarFrame(context.window);
         auto root = frame ? FindDirectChildByName(frame, L"RootGrid").try_as<Grid>() : nullptr;
         auto* copy = FindWidgetCopy(context.window);
         uint32_t index = 0;
-        if (copy && (copy->root != root || !root || !root.Children().IndexOf(copy->view.host,index))) {
-            RemoveWidgetCopy(context.window); copy = nullptr;
+        if (copy && (copy->cleanupPending || copy->root != root || !root ||
+                     !root.Children().IndexOf(copy->view.host,index))) {
+            if (!RemoveWidgetCopy(context.window)) return;
+            copy = nullptr;
         }
         if (!root) return;
         if (!copy) {
@@ -7260,7 +7657,7 @@ void ApplyToTaskbarWindow(void* contextValue) {
                 return;
             }
         }
-        RemoveWidgetCopy(taskbarWindow);
+        if (!RemoveWidgetCopy(taskbarWindow)) return;
         if (taskbarFrame && InjectWidget(taskbarFrame)) {
             RememberTaskbarWindow(taskbarWindow);
             context->succeeded = true;
@@ -8024,6 +8421,7 @@ struct TaskbarProjection {
     double scale = 1.0;
     std::wstring key;
     bool reservationOnly = false;
+    bool themePlaced = false;
 };
 struct ScopedPhysicalDpi {
     DPI_AWARENESS_CONTEXT previous = SetThreadDpiAwarenessContext(
@@ -8041,6 +8439,7 @@ void ProbeTaskbarFrameGeometry(TaskbarProjection& probe,
                                FrameworkElement frame) {
     probe.geometry.ready = false;
     probe.reservationOnly = false;
+    probe.themePlaced = false;
     if (!frame) {
         return;
     }
@@ -8049,6 +8448,9 @@ void ProbeTaskbarFrameGeometry(TaskbarProjection& probe,
         return;
     }
     auto repeater = FindDirectChildByName(root, L"TaskbarFrameRepeater");
+    if (auto host = FindDirectChildByName(root, kWidgetName).try_as<Grid>()) {
+        probe.themePlaced = ThemePlacesWidget(root.as<Grid>(), host);
+    }
     bool current = probe.window == g_taskbarWindow.load();
     // Capture this on the taskbar's UI thread along with the geometry. The
     // editor thread must not read XAML or mutable reservation state directly.
@@ -8668,7 +9070,7 @@ void UpdateMoveCandidate(
     PreferredPosition preferred{left, g_moveEditor->candidate.left,
                                 std::nullopt, pointer};
     auto resolved =
-        target.key.empty()
+        target.key.empty() || target.themePlaced
             ? WidgetPlacement{}
             : ResolveWidgetPlacement(*settings, target.geometry, preferred,
                                      g_moveEditor->visual.fontMetrics, true,
@@ -9073,6 +9475,10 @@ void BeginMoveEditor() {
         target = FindConfiguredTaskbarWindow();
     }
     auto projection = ProjectTaskbar(target);
+    if (projection.themePlaced) {
+        Wh_Log(L"Move editor unavailable: the theme controls widget placement");
+        return;
+    }
     if (!projection.geometry.ready || projection.key.empty()) {
         Wh_Log(
             L"Move editor unavailable: taskbar geometry or stable display "

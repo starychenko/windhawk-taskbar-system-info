@@ -201,6 +201,14 @@ fits; a rejected expansion restores the original margin. Root padding and
 borders are excluded from the usable area. Taskbar Styler themes can target
 `Grid#WindhawkTaskbarSystemInfo`; adaptive scaling uses an inner `Viewbox`.
 
+When a theme assigns that Grid to a column, narrows its column span or changes
+its alignment, the theme controls placement. The mod sizes the inner content
+within that slot and keeps the theme's `Auto` dimensions, margin and padding.
+Space reservation and the move editor do not override that placement. Removing
+those styles restores automatic placement and saved position preferences.
+Square borders using WindhawkBlur use a clipped native Border while keeping
+the theme's brush, border thickness and zero corner radius.
+
 Left and centered taskbar alignment use the same placement map. Separately drawn
 items or windows from another taskbar mod may need manual positioning or a
 compatibility fix. A particular Taskbar Styler preset still needs a live check.
@@ -391,7 +399,7 @@ placement errors and sensor mismatches. It does not print every sample.
 
 ## Compatibility
 
-The current source is **1.8.0**, built with Windhawk **1.7.3** for Windows 11.
+The current source is **1.8.1**, built with Windhawk **1.7.3** for Windows 11.
 The widget targets horizontal primary and secondary taskbars. x64 and ARM64
 builds pass; ARM64 hardware has not been checked.
 
@@ -465,6 +473,21 @@ used in the screenshot gallery.
 These isolated checks do not inject Explorer, change desktop DPI or prove a
 physical move between monitors with different taskbar heights.
 
+The Styler fixture checks columns 0/1/3 in a content-sized dock, bounded width,
+`Auto` dimensions without competing width writes, zero column-width metadata,
+resizing, stretched frames in an ancestor's Auto column, and theme removal.
+It also restores Styler's captured numeric dimensions before reapplying a theme,
+checks equal/weighted Star slots, fresh definitions and capped Pixel columns,
+and checks that the inner Viewbox fits its allocated slot.
+The border fixture uses a real composition backdrop effect and checks the
+square border clip, render-only radius/brush transitions and callback teardown
+on both primary and secondary hosts. One-shot fault injection checks secondary
+revocation retry, partial-attach recovery and cleanup during window destruction.
+It does not establish
+the final backdrop pixels in Explorer; that requires a live full-theme check.
+See the [TaskbarTweaks verification record](docs/issue-6174-verification.md)
+for the separate live observations and their limits.
+
 The metrics smoke test reads live Windows counters and adapter interfaces. It
 checks adapter selection, counter identity, ranges and available thermal zones.
 It checks both the array status and each matching value's `CStatus`; injected
@@ -503,7 +526,7 @@ expired publications skip the copy and discovery resumes when polling returns.
 Registry write times are checked before and after reading to reject concurrent
 changes. Numeric parsing and displayed decimals do not depend on Explorer's locale.
 
-See [the 1.8.0 release notes and verification](docs/releases/1.8.0.md),
+See [the 1.8.1 release notes and verification](docs/releases/1.8.1.md),
 the [1.7.1 upstream review fixes and remaining physical checks](docs/review-resolution-2026-10-04.md),
 [the placement verification record](docs/placement-verification-2026-10-04.md)
 for the checks and remaining Explorer scenarios, and
