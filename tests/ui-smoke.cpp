@@ -1,4 +1,11 @@
 // Isolated XAML Island: renders the actual widget without injecting Explorer.
+#include <initguid.h>
+#define IInspectable NativeIInspectable
+#define AsyncStatus NativeAsyncStatus
+#include <d2d1_1.h>
+#include <windows.graphics.effects.h>
+#undef IInspectable
+#undef AsyncStatus
 #include <windhawk_api.h>
 #include <windows.ui.xaml.hosting.desktopwindowxamlsource.h>
 #include <map>
@@ -20,6 +27,7 @@ BOOL KeepHidden(HWND, int) { return FALSE; }
 #include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.Graphics.Imaging.h>
+#include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.Storage.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <iostream>
@@ -126,9 +134,20 @@ struct SecondaryTestContext {
     std::wstring folder;
     std::string error;
 };
+bool CompositionBorderChecks(Grid host);
+
 void SecondaryUiChecks(const std::wstring& folder,
                        std::shared_ptr<const ModSettings> settings,
                        std::shared_ptr<const WidgetPresentation> model) {
+    // The primary watchdog enumerates real taskbar windows. During bitmap
+    // export Pump() can dispatch it and remove these synthetic controllers.
+    // This fixture exercises the secondary timers/queues on their own threads;
+    // coordinator discovery is exercised separately below.
+    struct ResumePrimaryTimer {
+        DispatcherTimer timer;
+        ~ResumePrimaryTimer() { if (timer) timer.Start(); }
+    } resume{g_timer};
+    if (resume.timer) resume.timer.Stop();
     struct Context : SecondaryTestContext { HWND window = nullptr; } context;
     context.settings = settings; context.model = model; context.folder = folder;
     std::atomic<bool> ready{false};
@@ -145,7 +164,8 @@ void SecondaryUiChecks(const std::wstring& folder,
             Grid root; root.Width(1800); root.Height(48);
             root.Name(L"RootGrid"); root.RequestedTheme(ElementTheme::Light);
             root.Background(SolidColorBrush(Color{255,242,242,242}));
-            island.Content(root); SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(&root));
+            Grid frame; frame.Children().Append(root);
+            island.Content(frame); SetWindowLongPtrW(window,GWLP_USERDATA,reinterpret_cast<LONG_PTR>(&root));
             context.window=window; ready=true;
             MSG message;
             while (GetMessageW(&message,nullptr,0,0)>0) {
@@ -214,6 +234,33 @@ void SecondaryUiChecks(const std::wstring& folder,
                     throw std::runtime_error("high contrast palette or alert rendering lost");
                 copy->settings = test.settings; copy->styled = false;
                 UpdateSecondaryWidget(*copy, true); settle();
+                // Repeat Styler's captured-value restoration on the secondary
+                // owner thread, then reapply column-only placement.
+                auto originalWidth = copy->view.host.Width();
+                auto originalHeight = copy->view.host.Height();
+                auto originalMargin = copy->view.host.Margin();
+                ColumnDefinition leftColumn, rightColumn;
+                leftColumn.Width({400, GridUnitType::Pixel});
+                rightColumn.Width({1, GridUnitType::Star});
+                root.ColumnDefinitions().Append(leftColumn);
+                root.ColumnDefinitions().Append(rightColumn);
+                Grid::SetColumn(copy->view.host, 1); Grid::SetColumnSpan(copy->view.host, 1);
+                copy->view.host.Width(NAN); copy->view.host.Height(NAN);
+                UpdateSecondaryWidget(*copy, false); settle();
+                Grid::SetColumn(copy->view.host, 0); Grid::SetColumnSpan(copy->view.host, 2);
+                copy->view.host.Width(originalWidth); copy->view.host.Height(originalHeight);
+                copy->view.host.Margin(originalMargin);
+                UpdateSecondaryWidget(*copy, false); settle();
+                Grid::SetColumn(copy->view.host, 1); Grid::SetColumnSpan(copy->view.host, 1);
+                UpdateSecondaryWidget(*copy, false); settle();
+                if (!std::isnan(copy->view.host.Width()) || !std::isnan(copy->view.host.Height()) ||
+                    copy->view.host.Margin() != Thickness{})
+                    throw std::runtime_error("Secondary reapply retains restored automatic geometry");
+                if (!CompositionBorderChecks(copy->view.host))
+                    throw std::runtime_error("Secondary render-only border transition failed");
+                Grid::SetColumn(copy->view.host, 0); Grid::SetColumnSpan(copy->view.host, 1);
+                root.ColumnDefinitions().Clear();
+                UpdateSecondaryWidget(*copy, false); settle();
                 // Bitmap export is tested on the primary XAML thread below.
                 stage="obstacle";
                 Button obstacle; obstacle.Width(650); obstacle.Height(48);
@@ -232,21 +279,108 @@ void SecondaryUiChecks(const std::wstring& folder,
                 copy->model=stale; UpdateSecondaryWidget(*copy,true);
                 if(copy->view.texts[1].Text()!=L"--%" || copy->view.graphs[0].Visibility()!=Visibility::Collapsed)
                     throw std::runtime_error("secondary retains stale metrics");
-                RemoveWidgetCopy(test.window);
+                auto removedHost = copy->view.host;
+                // A transient revoke failure must leave the host/controller
+                // reachable and report failure; the owner-thread retry must
+                // revoke only the token that is still outstanding.
+                g_borderRevokeTestHook = [](DependencyProperty const& property) {
+                    if (property == Grid::BorderBrushProperty()) {
+                        g_borderRevokeTestHook = nullptr;
+                        throw hresult_error(E_FAIL);
+                    }
+                };
+                SyncCopyContext failedRemoval{test.window, {}, {}, true};
+                SyncCopyOnOwner(&failedRemoval);
+                g_borderRevokeTestHook = nullptr;
+                uint32_t retainedIndex = 0;
+                if (failedRemoval.succeeded || FindWidgetCopy(test.window) != copy ||
+                    !copy->cleanupPending || !copy->borderSubscriptions.brush ||
+                    copy->borderSubscriptions.radius ||
+                    !root.Children().IndexOf(removedHost, retainedIndex))
+                    throw std::runtime_error("Failed secondary revoke discarded retry state");
+                SyncCopyContext retriedRemoval{test.window, {}, {}, true};
+                SyncCopyOnOwner(&retriedRemoval);
+                if (!retriedRemoval.succeeded)
+                    throw std::runtime_error("Secondary callback revoke retry failed");
+                std::wcout << L"PASS: secondary callback revoke failure retains state and retries\n";
                 if (FindWidgetCopy(test.window) || root.Children().Size()!=1)
                     throw std::runtime_error("secondary detach leaked host or subclass");
-                copy=AttachSecondaryWidget(test.window,root); copy->settings=test.settings; copy->model=test.model;
+                auto removedLayer = removedHost.Children().GetAt(1).as<Canvas>();
+                auto removedBorder = removedLayer.Children().GetAt(0).as<Border>();
+                SolidColorBrush sentinel(Color{255, 1, 2, 3});
+                removedBorder.BorderBrush(sentinel); removedLayer.Visibility(Visibility::Visible);
+                removedHost.CornerRadius({3, 3, 3, 3}); Pump();
+                if (removedBorder.BorderBrush() != sentinel || removedLayer.Visibility() != Visibility::Visible)
+                    throw std::runtime_error("Detached secondary host retained a border callback");
+                g_secondaryAttachTestHook = [] {
+                    g_secondaryAttachTestHook = nullptr;
+                    throw hresult_error(E_FAIL);
+                };
+                g_borderRevokeTestHook = [](DependencyProperty const& property) {
+                    if (property == Grid::BorderBrushProperty()) {
+                        g_borderRevokeTestHook = nullptr;
+                        throw hresult_error(E_FAIL);
+                    }
+                };
+                bool attachFailed = false;
+                try { AttachSecondaryWidget(test.window, root); }
+                catch (const hresult_error&) { attachFailed = true; }
+                copy = FindWidgetCopy(test.window);
+                if (!attachFailed || !copy || !copy->cleanupPending ||
+                    !copy->borderSubscriptions.brush || copy->borderSubscriptions.radius)
+                    throw std::runtime_error("Partial secondary attach discarded cleanup state");
+                {
+                    auto savedProbe = g_testFindTaskbarFrame;
+                    struct RestoreProbe {
+                        decltype(g_testFindTaskbarFrame) saved;
+                        ~RestoreProbe() { g_testFindTaskbarFrame = saved; }
+                    } restore{savedProbe};
+                    g_testFindTaskbarFrame = [](HWND window) -> FrameworkElement {
+                        auto& grid = *reinterpret_cast<Grid*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+                        return VisualTreeHelper::GetParent(grid).as<FrameworkElement>();
+                    };
+                    SyncCopyContext recover{test.window, test.settings, test.model};
+                    SyncCopyOnOwner(&recover);
+                    copy = FindWidgetCopy(test.window);
+                    if (!recover.succeeded || !copy || copy->cleanupPending ||
+                        !copy->borderSubscriptions.brush || !copy->borderSubscriptions.radius ||
+                        !copy->layoutToken.value || !copy->themeToken.value)
+                        throw std::runtime_error("Partial secondary attach was reused without complete setup");
+                }
+                std::wcout << L"PASS: partial secondary attach cleans up and recreates subscriptions\n";
+                copy->settings=test.settings; copy->model=test.model;
                 UpdateSecondaryWidget(*copy,true);
                 RemoveWidgetCopyFromRoot(root);
                 if (FindWidgetCopy(test.window) || root.Children().Size()!=1)
                     throw std::runtime_error("Promoting a taskbar retained its secondary widget");
                 copy=AttachSecondaryWidget(test.window,root);
+                if (!copy) throw std::runtime_error("Secondary reattach after promotion failed");
                 auto disabled=std::make_shared<ModSettings>(*test.settings); disabled->allMonitors=false;
                 SyncCopyContext disable{test.window,disabled,test.model}; SyncCopyOnOwner(&disable);
                 if (!disable.succeeded || FindWidgetCopy(test.window))
                     throw std::runtime_error("Disabling copies retained native registration");
+                // A native destroy has one last synchronous owner-thread retry.
+                HWND destroyed = CreateWindowExW(0, L"STATIC", L"", WS_POPUP,
+                    0, 0, 600, 48, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                Grid destroyedRoot;
+                if (!destroyed || !AttachSecondaryWidget(destroyed, destroyedRoot))
+                    throw std::runtime_error("Destroy cleanup fixture attach failed");
+                g_borderRevokeTestHook = [](DependencyProperty const& property) {
+                    if (property == Grid::BorderBrushProperty()) {
+                        g_borderRevokeTestHook = nullptr;
+                        throw hresult_error(E_FAIL);
+                    }
+                };
+                DestroyWindow(destroyed);
+                auto remainingCopies = CopyWindows();
+                if (g_borderRevokeTestHook || destroyedRoot.Children().Size() ||
+                    std::find(remainingCopies.begin(), remainingCopies.end(), destroyed) != remainingCopies.end())
+                    throw std::runtime_error("Native destroy lost pending secondary cleanup");
+                std::wcout << L"PASS: native destroy retries transient callback revocation\n";
                 // Recreate after teardown, then let mod-thread cleanup marshal back.
-                copy=AttachSecondaryWidget(test.window,root); copy->settings=test.settings; copy->model=test.model;
+                copy=AttachSecondaryWidget(test.window,root);
+                if (!copy) throw std::runtime_error("Secondary reattach after disable failed");
+                copy->settings=test.settings; copy->model=test.model;
                 UpdateSecondaryWidget(*copy,true); settle();
             } catch(const std::exception& e) { test.error=e.what(); }
               catch(const winrt::hresult_error& e) { test.error=stage + " secondary test HRESULT " + std::to_string(static_cast<unsigned>(e.code())); }
@@ -269,6 +403,8 @@ void SecondaryUiChecks(const std::wstring& folder,
     Grid shotRoot; shotRoot.Width(1000); shotRoot.Height(48); shotIsland.Content(shotRoot);
     auto* shot=AttachSecondaryWidget(shotWindow,shotRoot); shot->settings=settings; shot->model=model;
     for(bool light : {true,false}) {
+        if (FindWidgetCopy(shotWindow) != shot)
+            throw std::runtime_error("Synthetic secondary was removed during bitmap export");
         shotRoot.RequestedTheme(light ? ElementTheme::Light : ElementTheme::Dark);
         shotRoot.Background(SolidColorBrush(light ? Color{255,242,242,242} : Color{255,32,32,32}));
         shotRoot.Measure(Size{1000,48}); shotRoot.Arrange(Rect{0,0,1000,48}); shotRoot.UpdateLayout(); Pump();
@@ -282,8 +418,11 @@ void SecondaryUiChecks(const std::wstring& folder,
 }
 
 #include "coordinator-smoke.inc.cpp"
+#include "composition-border.inc.cpp"
+#include "styler-layout.inc.cpp"
 
 int wmain(int argc, wchar_t** argv) {
+    std::wcout << std::unitbuf;
     if (argc != 2) return 2;
     init_apartment(apartment_type::single_threaded);
     Windows::UI::Xaml::Hosting::WindowsXamlManager manager{nullptr};
@@ -584,6 +723,10 @@ int wmain(int argc, wchar_t** argv) {
             SetWindowPos(child, nullptr, 0, 0, 520, 64, SWP_NOZORDER | SWP_NOACTIVATE);
             if (!InjectWidget(frame)) throw std::runtime_error("Post-dock injection failed");
         }
+        StylerLayoutChecks(island, child, argv[1], initialSettings);
+        island.Content(frame);
+        SetWindowPos(child, nullptr, 0, 0, 520, 64, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (!InjectWidget(frame)) throw std::runtime_error("Post-Styler injection failed");
         {
             auto multiple = std::make_shared<ModSettings>(*initialSettings);
             multiple->allMonitors = true; multiple->showNetwork = true; g_settings = multiple;
@@ -1543,7 +1686,8 @@ int wmain(int argc, wchar_t** argv) {
     StopFontGraphics();
     if (g_fontGraphicsToken || !cleanup.succeeded || g_widget || g_widgetHost || g_timer ||
         g_rootSizeChangedToken.value || g_actualThemeChangedToken.value ||
-        g_rootLayoutUpdatedToken.value || g_systemTrayFrame) {
+        g_rootLayoutUpdatedToken.value || g_systemTrayFrame ||
+        g_borderSubscriptions.brush || g_borderSubscriptions.radius) {
         std::cerr << "XAML cleanup did not release all widget resources\n";
         result = 1;
     }
