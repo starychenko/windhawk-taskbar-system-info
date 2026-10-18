@@ -2,6 +2,8 @@ param(
     [string]$WindhawkRoot = (Join-Path $env:ProgramFiles 'Windhawk')
 )
 $ErrorActionPreference = 'Stop'
+& python -B (Join-Path $PSScriptRoot 'prepare-ui-source.py')
+if ($LASTEXITCODE -ne 0) { throw 'Preparing UI fixture source failed' }
 $compilerRoot = Join-Path $WindhawkRoot 'Compiler'
 $compiler = Join-Path $compilerRoot 'bin\clang++.exe'
 $outputDirectory = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build-ui-smoke'))

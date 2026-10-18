@@ -20,8 +20,7 @@ BOOL Set(PCWSTR key, PCWSTR value) { values[key] = value; return TRUE; }
 namespace uiStorage {
 BOOL KeepHidden(HWND, int) { return FALSE; }
 }
-#define WH_TASKBAR_COORDINATOR_TEST
-#include "../taskbar-system-info.wh.cpp"
+#include "../build-ui-smoke/instrumented-mod.wh.cpp"
 #undef Wh_SetStringValue
 #undef ShowWindow
 #include <winrt/Windows.UI.Xaml.Hosting.h>
@@ -298,10 +297,30 @@ void SecondaryUiChecks(const std::wstring& folder,
                     copy->borderSubscriptions.radius ||
                     !root.Children().IndexOf(removedHost, retainedIndex))
                     throw std::runtime_error("Failed secondary revoke discarded retry state");
+                if (copy->timerRegistered || copy->subclassRegistered)
+                    throw std::runtime_error("Failed XAML revoke retained native timer/subclass");
+                auto oldModel = copy->model;
+                SendMessageW(test.window, WM_TIMER, kCopySubclass, 0);
+                if (copy->model != oldModel)
+                    throw std::runtime_error("Stopped copy received a queued timer callback");
                 SyncCopyContext retriedRemoval{test.window, {}, {}, true};
+                // Pause at the property-removal boundary while an engine thread
+                // retires the now-propertyless HWND, as mod unload can do.
+                g_copyPropertyRemovedTestHook = [](HWND window) {
+                    std::thread engine([window] { RetireDeadCopyWindow(window); });
+                    engine.join();
+                };
                 SyncCopyOnOwner(&retriedRemoval);
+                g_copyPropertyRemovedTestHook = nullptr;
+                if (!g_pendingCopyCleanup.empty()) {
+                    // The broken order queues the just-deleted controller. Do
+                    // not dereference it while reporting the regression.
+                    g_pendingCopyCleanup.clear();
+                    throw std::runtime_error("Unload queued a deleted secondary controller");
+                }
                 if (!retriedRemoval.succeeded)
                     throw std::runtime_error("Secondary callback revoke retry failed");
+                std::wcout << L"PASS: concurrent unload cannot queue a removed controller\n";
                 std::wcout << L"PASS: secondary callback revoke failure retains state and retries\n";
                 if (FindWidgetCopy(test.window) || root.Children().Size()!=1)
                     throw std::runtime_error("secondary detach leaked host or subclass");
@@ -377,6 +396,41 @@ void SecondaryUiChecks(const std::wstring& folder,
                     std::find(remainingCopies.begin(), remainingCopies.end(), destroyed) != remainingCopies.end())
                     throw std::runtime_error("Native destroy lost pending secondary cleanup");
                 std::wcout << L"PASS: native destroy retries transient callback revocation\n";
+                // A failure lasting through native destruction retains its XAML
+                // controller on the owner thread, independently of the dead HWND.
+                destroyed = CreateWindowExW(0, L"STATIC", L"", WS_POPUP,
+                    0, 0, 600, 48, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                Grid deferredRoot;
+                AttachSecondaryWidget(destroyed, deferredRoot);
+                g_borderRevokeTestHook = [](DependencyProperty const&) { throw hresult_error(E_FAIL); };
+                g_copyPropertyRemovedTestHook = [](HWND window) {
+                    std::thread engine([window] { RetireDeadCopyWindow(window); });
+                    engine.join();
+                };
+                DestroyWindow(destroyed);
+                g_copyPropertyRemovedTestHook = nullptr;
+                auto deadCopies = CopyWindows();
+                if (g_pendingCopyCleanup.size() != 1 ||
+                    std::find(deadCopies.begin(), deadCopies.end(), destroyed) != deadCopies.end())
+                    throw std::runtime_error("Concurrent destroy did not retain exactly one cleanup owner");
+                g_borderRevokeTestHook = nullptr;
+                if (!RetryPendingCopyCleanup() || !g_pendingCopyCleanup.empty() || deferredRoot.Children().Size())
+                    throw std::runtime_error("Deferred destroyed copy did not finish XAML cleanup");
+                std::wcout << L"PASS: concurrent unload and native destroy retain one cleanup owner\n";
+
+                // The subclass can already be removed when the HWND dies.
+                destroyed = CreateWindowExW(0, L"STATIC", L"", WS_POPUP,
+                    0, 0, 600, 48, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                Grid detachedRoot;
+                AttachSecondaryWidget(destroyed, detachedRoot);
+                g_borderRevokeTestHook = [](DependencyProperty const&) { throw hresult_error(E_FAIL); };
+                if (RemoveWidgetCopy(destroyed))
+                    throw std::runtime_error("Injected persistent revocation unexpectedly succeeded");
+                DestroyWindow(destroyed);
+                g_borderRevokeTestHook = nullptr;
+                if (!RemoveAllWidgetCopies() || !g_pendingCopyCleanup.empty() || detachedRoot.Children().Size())
+                    throw std::runtime_error("Dead HWND without subclass lost the retained controller");
+                std::wcout << L"PASS: repeated revoke failures stop native callbacks and recover after HWND destruction\n";
                 // Recreate after teardown, then let mod-thread cleanup marshal back.
                 copy=AttachSecondaryWidget(test.window,root);
                 if (!copy) throw std::runtime_error("Secondary reattach after disable failed");
@@ -604,6 +658,16 @@ int wmain(int argc, wchar_t** argv) {
             scene.Width(400); settleDock();
             if (g_widgetHost.Visibility() != Visibility::Collapsed || g_reservedMargin != 0)
                 throw std::runtime_error("Shrinking an already expanded dock retains clipped content");
+            for (bool changeUnits : {false, true}) {
+                g_reservationRejected = true;
+                if (changeUnits) dockSettings->networkBits = !dockSettings->networkBits;
+                else dockSettings->showNetwork = !dockSettings->showNetwork;
+                ApplyTaskbarPlacement(*dockSettings);
+                if (g_reservationRejected)
+                    throw std::runtime_error("Network setting did not invalidate rejected reservation");
+                settleDock();
+            }
+            dockSettings->showNetwork = false; dockSettings->networkBits = false;
             scene.Width(1200); settleDock();
             if (g_widgetHost.Visibility() != Visibility::Visible)
                 throw std::runtime_error("An expanded dock does not recover after shrink/grow");
@@ -740,7 +804,7 @@ int wmain(int argc, wchar_t** argv) {
             networkModel->metrics.netUpBytes = 1536;
             model = networkModel;
             SecondaryUiChecks(argv[1], multiple, model);
-            CoordinatorUiChecks(multiple, model);
+            CoordinatorUiChecks(argv[1], multiple, model);
             g_settings = initialSettings; ApplyWidgetSettings();
         }
         // Exercise real XAML cells with the optional column in both units,

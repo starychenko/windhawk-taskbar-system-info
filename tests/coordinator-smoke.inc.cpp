@@ -1,7 +1,7 @@
 // Included by ui-smoke.cpp after the production implementation and XAML helpers.
 // Only the private Explorer root lookup is substituted. Enumeration, owner-thread
 // dispatch, reconciliation, subclasses, timers and XAML trees remain real.
-void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
+void CoordinatorUiChecks(const std::wstring& folder, std::shared_ptr<const ModSettings> settings,
                          std::shared_ptr<const WidgetPresentation> model) {
     auto byteSettings = std::make_shared<ModSettings>(*settings);
     byteSettings->allMonitors = true; byteSettings->showNetwork = true;
@@ -14,12 +14,14 @@ void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
     freshModel->metrics.netUpBytes = 1536;
     model = freshModel;
     struct StateGuard {
+        DispatcherTimer timer = g_timer;
         HWND primary = g_taskbarWindow.load();
         Grid widget = g_widget, host = g_widgetHost, root = g_rootGrid;
         std::shared_ptr<const ModSettings> settings = CurrentSettings();
         std::shared_ptr<const WidgetPresentation> model;
         decltype(g_testFindTaskbarFrame) lookup = g_testFindTaskbarFrame;
         StateGuard() {
+            if (timer) timer.Stop();
             std::lock_guard lock(g_presentationMutex);
             model = g_presentation;
         }
@@ -30,6 +32,7 @@ void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
             g_widget = widget; g_widgetHost = host; g_rootGrid = root;
             { std::lock_guard lock(g_settingsMutex); g_settings = settings; }
             { std::lock_guard lock(g_presentationMutex); g_presentation = model; }
+            if (timer) timer.Start();
         }
     } saved;
     struct TaskbarFixture {
@@ -118,11 +121,34 @@ void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
     require(copy->view.texts[13].Text() == L"122 KB/s" &&
                 copy->view.texts[15].Text() == L"1.5 KB/s",
             "Coordinator did not deliver byte-unit network settings");
+    // Render the actual primary and secondary view with the same sample. The
+    // network rates are illustrative; hardware readings use the documented sample.
+    primary.root.RequestedTheme(ElementTheme::Dark);
+    secondary.root.RequestedTheme(ElementTheme::Light);
+    primaryView.host.Background(SolidColorBrush(Color{255, 32, 32, 32}));
+    copy->view.host.Background(SolidColorBrush(Color{255, 242, 242, 242}));
+    auto layout = BuildWidgetLayout(*settings, model->font, WidgetLayoutMode::Full, 48);
+    ApplyElementGeometry(primaryView, layout);
+    primaryView.host.Width(layout.width); primaryView.host.Height(layout.height);
+    std::array<SolidColorBrush, 3> primaryPalette{
+        SolidColorBrush(Color{255,120,168,255}), SolidColorBrush(Color{255,255,185,0}),
+        SolidColorBrush(Color{255,255,107,107})};
+    StyleWidgetElements(primaryView, *settings, primaryPalette, nullptr, false);
+    RenderWidgetValues(primaryView, model->metrics, *settings, model->alerts, primaryPalette, nullptr);
+    for (size_t i = 0; i < 2; ++i)
+        UpdateSparkline(primaryView.graphs[i], model->histories[i], *settings,
+                        SampleTime::clock::now(), layout.graphs[i].Width, layout.showGraphs);
+    primary.Settle(); secondary.Settle();
+    UpdateSecondaryWidget(*copy, true);
+    SaveImage(primaryView.host, folder, L"documentation-network-primary.png");
+    SaveImage(copy->view.host, folder, L"documentation-network-secondary.png");
     auto next = std::make_shared<WidgetPresentation>(*model);
     next->metrics.cpuAvailable = true; next->metrics.cpu = 42;
     next->metrics.capturedAt = SampleTime::clock::now();
     { std::lock_guard lock(g_presentationMutex); g_presentation = next; }
-    SyncWidgetCopies();
+    auto lookups = g_testFrameLookups;
+    SendMessageW(secondary.window, WM_TIMER, kCopySubclass, 0);
+    require(g_testFrameLookups == lookups, "Copy timer rediscovered the taskbar");
     require(FindWidgetCopy(secondary.window) == copy && secondary.root.Children().Size() == 1 &&
                 copy->view.texts[1].Text() == FormatPercent(42),
             "Coordinator update duplicated the instance or retained old values");
@@ -134,6 +160,44 @@ void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
                 copy->view.texts[13].Text() == L"1.0 Mbps" &&
                 copy->view.texts[15].Text() == L"12 Kbps",
             "Coordinator settings update retained byte-unit network values");
+
+    RequestWidgetCopySync();
+    RefreshWidgetCopies();
+    lookups = g_testFrameLookups;
+    for (int i = 0; i < 100; ++i) {
+        RefreshWidgetCopies();
+        SendMessageW(secondary.window, WM_TIMER, kCopySubclass, 0);
+    }
+    require(g_testFrameLookups == lookups,
+            "Stable refreshes repeated secondary XAML discovery");
+
+    // A temporarily missing root receives a bounded retry budget. A subsequent
+    // lifecycle event re-arms it, even after that budget has been exhausted.
+    RemovePropW(secondary.window, L"TaskbarSystemInfo.CoordinatorFixture");
+    RequestWidgetCopySync();
+    lookups = g_testFrameLookups;
+    RefreshWidgetCopies();
+    auto afterFirst = g_testFrameLookups;
+    RefreshWidgetCopies();
+    require(g_testFrameLookups == afterFirst, "Copy retry ignored its backoff");
+    for (unsigned i = 0; i < kMaximumCopySyncAttempts + 5; ++i) {
+        g_copySyncState.nextAttempt = {};
+        RefreshWidgetCopies();
+    }
+    require(g_testFrameLookups - lookups == kMaximumCopySyncAttempts,
+            "Missing XAML root caused unbounded or missing retries");
+    SetPropW(secondary.window, L"TaskbarSystemInfo.CoordinatorFixture", &secondary.frame);
+    SendMessageW(primary.window, WM_DISPLAYCHANGE, 0, 0);
+    // The fixture uses DefWindowProc for its synthetic primary. Deliver the
+    // production notification procedure explicitly, with the same parameters.
+    TaskbarNotificationsProc(primary.window, WM_DISPLAYCHANGE, 0, 0, 1, 0);
+    RefreshWidgetCopies();
+    copy = FindWidgetCopy(secondary.window);
+    require(copy && !copy->cleanupPending, "Display change did not re-arm discovery");
+    lookups = g_testFrameLookups;
+    RefreshWidgetCopies();
+    require(g_testFrameLookups == lookups, "Successful recovery kept polling");
+    std::wcout << L"PASS: stable copies avoid discovery; timer consumes samples; retries are bounded and re-armed by display changes\n";
 
     // A wrong HWND mapping must still never put another host on the primary root.
     g_taskbarWindow = secondary.window;
@@ -161,10 +225,14 @@ void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
     // The native HWND survives a XAML root rebuild; its old subscriptions/host
     // must be removed and the controller must switch to the replacement root.
     auto oldRoot = secondary.root;
+    auto beforeUnload = g_copySyncRevision.load();
     secondary.frame.Children().Clear();
     secondary.root = Grid(); secondary.root.Name(L"RootGrid");
     secondary.frame.Children().Append(secondary.root); secondary.Settle();
-    SyncWidgetCopies();
+    Pump();
+    require(g_copySyncRevision.load() != beforeUnload,
+            "Replacing the XAML root did not request rediscovery");
+    RefreshWidgetCopies();
     copy = FindWidgetCopy(secondary.window);
     require(copy && copy->root == secondary.root && oldRoot.Children().Size() == 0 &&
                 secondary.root.Children().Size() == 1,
@@ -188,6 +256,13 @@ void CoordinatorUiChecks(std::shared_ptr<const ModSettings> settings,
     require(CopyWindows().empty() && !FindWidgetCopy(removedWindow) &&
                 secondary.root.Children().Size() == 0 && primary.root.Children().Size() == 1,
             "Coordinator window destruction retained a host or native registration");
+    {
+        std::lock_guard lock(g_copyWindowsMutex);
+        g_copyWindows.push_back(removedWindow);
+        g_copyWindows.push_back(primary.window);
+    }
+    require(RemoveAllWidgetCopies() && CopyWindows().empty(),
+            "Dead or propertyless HWND blocked copy cleanup");
     std::wcout << L"PASS: production coordinator unknown/recovered primary, ownership guard, "
                   L"model/settings updates, root replacement, disable/re-enable and window removal\n";
 }
