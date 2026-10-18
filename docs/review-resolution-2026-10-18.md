@@ -97,5 +97,8 @@ The square-backdrop-border workaround is unchanged. The reporter confirmed that
 Double blending on Windows builds where the native square border already works
 has not been reproduced; this revision makes no broader claim about Styler.
 
-These corrections update the PR branch. The previously published v1.8.1 release
-asset and tag are unchanged and do not contain this review follow-up.
+These corrections are included in the October 18 refresh of v1.8.1. The original
+October 15 release did not contain them. The refreshed source matches upstream
+PR #6253 at `300858378902543f23a95039c1308637a882db41`; tests and supporting
+documentation live in this companion repository. See the
+[release notes](releases/1.8.1.md) for update instructions and verification limits.

@@ -412,10 +412,12 @@ The current source is **1.8.1**, built with Windhawk **1.7.3** for Windows 11.
 The widget targets horizontal primary and secondary taskbars. x64 and ARM64
 builds pass; ARM64 hardware has not been checked.
 
-Placement and editing pass isolated XAML/Win32 tests. Live Explorer checks for
-this version are still pending, including top/bottom taskbars, physical moves
-between monitors with different DPI, unplug/reconnect, restart persistence and
-Taskbar Styler presets. Test renders do not prove those configurations.
+Placement and editing pass isolated XAML/Win32 tests. The final 1.8.1 correction
+build was also checked in Explorer on Windows build 26300.9711 with Windhawk
+1.7.3 and one 1920x1200 RDP display: live metrics, Show on all monitors on/off,
+and mod disable/re-enable passed without restarting Explorer. Live secondary
+taskbar creation/removal, top taskbars, mixed-DPI moves, physical unplug/reconnect,
+restart persistence and other Taskbar Styler presets remain unverified.
 
 The normal widget uses native taskbar XAML. Move mode uses a temporary Win32
 window. It does not use XAML Diagnostics. Display changes recheck the target even
@@ -538,7 +540,8 @@ expired publications skip the copy and discovery resumes when polling returns.
 Registry write times are checked before and after reading to reject concurrent
 changes. Numeric parsing and displayed decimals do not depend on Explorer's locale.
 
-See [the 1.8.1 release notes and verification](docs/releases/1.8.1.md),
+See [the refreshed 1.8.1 release notes](docs/releases/1.8.1.md),
+the [October 18 review corrections and live check](docs/review-resolution-2026-10-18.md),
 the [1.7.1 upstream review fixes and remaining physical checks](docs/review-resolution-2026-10-04.md),
 [the placement verification record](docs/placement-verification-2026-10-04.md)
 for the checks and remaining Explorer scenarios, and
