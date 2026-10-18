@@ -72,6 +72,15 @@ the next fresh sample restores the readings, including in move mode.
 
 ![Unavailable readings](assets/widget-unavailable.png)
 
+Enable **Show network speed** for download/upload rates, and **Show on all
+monitors** for a copy on each available taskbar. Copies share the readings and
+use their own taskbar's theme and available space. These isolated renders show
+the same sample on dark and light taskbars; network rates are illustrative.
+
+| Main widget with network rates | Copy on another taskbar |
+| --- | --- |
+| ![Main widget with download and upload rates](assets/widget-network-primary.png) | ![Secondary widget with the same readings and its own light theme](assets/widget-network-secondary.png) |
+
 ## Adaptive layouts
 
 Adaptation is automatic on the selected taskbar. The mod measures the free gaps
@@ -481,8 +490,11 @@ checks equal/weighted Star slots, fresh definitions and capped Pixel columns,
 and checks that the inner Viewbox fits its allocated slot.
 The border fixture uses a real composition backdrop effect and checks the
 square border clip, render-only radius/brush transitions and callback teardown
-on both primary and secondary hosts. One-shot fault injection checks secondary
-revocation retry, partial-attach recovery and cleanup during window destruction.
+on both primary and secondary hosts. Fault injection checks secondary revocation retry, partial-attach recovery,
+stopped native callbacks after failed XAML cleanup, and owner-thread cleanup
+after native window destruction. Coordinator checks cover timer consumption of
+shared samples, no repeated discovery during stable updates, bounded readiness
+retries, display-change recovery and XAML root replacement.
 It does not establish
 the final backdrop pixels in Explorer; that requires a live full-theme check.
 See the [TaskbarTweaks verification record](docs/issue-6174-verification.md)

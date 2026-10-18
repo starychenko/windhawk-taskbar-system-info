@@ -692,7 +692,7 @@ def main() -> int:
     assert "for (const MetricsSnapshot& newSnapshot : newSnapshots)" in update_widget
     assert "UpdateTimerInterval();" in update_widget
     assert "std::deque<PublishedMetricsSnapshot> g_publishedMetrics" in source
-    assert "RenderWidgetValues(PrimaryElements()" in update_widget
+    assert "RenderWidgetValues(PrimaryElements()" in canonical_cpp(update_widget)
     assert "SetTextIfChanged" in extract_cpp_function(source, "RenderWidgetValues")
     assert "std::chrono::milliseconds(g_widget ? 250 : 1000)" not in source
     assert "TextTrimming::CharacterEllipsis" in source
