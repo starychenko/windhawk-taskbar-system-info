@@ -2,6 +2,8 @@
 
 Review: https://github.com/ramensoftware/windhawk-mods/pull/6253#issuecomment-6232025212
 
+Follow-up: https://github.com/ramensoftware/windhawk-mods/pull/6253#issuecomment-6248173113
+
 ## Changes
 
 - Secondary discovery runs after display/work-area changes, settings changes,
@@ -14,6 +16,11 @@ Review: https://github.com/ramensoftware/windhawk-mods/pull/6253#issuecomment-62
   native windows are removed from the active registry; their outstanding XAML
   controllers remain separately reachable for cleanup on the original thread.
   Cleanup does not add a permanent module pin or discard failed subscriptions.
+- Remove a successfully detached controller from the registry before removing
+  its HWND property. On failed cleanup during native destruction, transfer the
+  registry owner to the pending queue before removing the property. This avoids
+  both a dangling queued controller and duplicate pending ownership when unload
+  observes a propertyless HWND at that boundary.
 - Network visibility and byte/bit units now invalidate rejected dock reservations.
 - Removed the duplicate RAM/VRAM bar updates and unused helpers; added `<limits>`.
 - Formatted the code introduced since catalog version 1.7.2 using the catalog's
@@ -36,6 +43,12 @@ Review: https://github.com/ramensoftware/windhawk-mods/pull/6253#issuecomment-62
   stale/propertyless registry entries, and reservation invalidation for both
   network settings. Existing secondary-thread, theme, placement, rendering and
   move-preview checks also passed.
+- Deterministic unload interleaving: after the real HWND property is removed,
+  another thread runs the production retirement function before owner-thread
+  removal continues. The new test fails on the previous source with
+  `Unload queued a deleted secondary controller` and passes after the fix.
+  The repeated-revocation/native-destruction case also verifies exactly one
+  pending cleanup owner and successful owner-thread cleanup.
 - `tests/run-metrics-smoke.ps1`: live counters and injected invalid engine data
   passed, including the expected failure exit code 5 for injected failures.
 - `build.ps1 -OutputDirectory build-review-6253/x64`: passed, no warnings.
@@ -43,10 +56,38 @@ Review: https://github.com/ramensoftware/windhawk-mods/pull/6253#issuecomment-62
   cross-build passed, no warnings.
 - `git diff --check`: passed. Both new PNGs were visually inspected.
 
+## Live Explorer check on 2026-10-18
+
+The final uninstrumented x64 DLL was temporarily loaded through Windhawk 1.7.3
+into the existing Explorer process on Windows build 26300.9711. The active RDP
+desktop had one 1920x1200 display. The installed source, DLL and configuration
+were backed up before the test.
+
+- Visually checked CPU/GPU/RAM/VRAM, graphs and network rates on the taskbar.
+  Readings changed between captures and the widget remained within the taskbar.
+- Changed `allMonitors` from 0 to 1 and back to 0 through the normal Windhawk
+  settings-change mechanism. The main widget remained visible. There was no
+  secondary live taskbar in this session.
+- Disabled the candidate while `allMonitors=1`: its DLL unloaded and the widget
+  disappeared. Re-enabled it: the DLL loaded and the widget reappeared with fresh
+  readings. Explorer retained the same PID throughout; no Explorer crash/hang
+  events were found for the test period.
+- Restored the original installed DLL and enabled state. The complete mod
+  registry export and installed source matched their backups byte-for-byte;
+  the temporary candidate DLL was removed.
+
+Tested source SHA-256 (workspace bytes):
+`B590829DFD928E11CC6205AD83F668AF1BE6558A3931E5888A91B9F06F3ECA8E`.
+Tested x64 DLL SHA-256:
+`B11F93D5CF24E61FA823404315503CFDEB165B8834EE8964463843F8650839AF`.
+Local evidence is retained under ignored `build-review-6253`: the
+`explorer-check.jsonl` state log, `explorer-verification.json`, registry backup
+and comparison, and four `explorer-*.png` captures.
+
 ## Boundaries
 
-The current corrections were not installed into Explorer. Physical monitor
-hot-plug/mixed-DPI behavior and ARM64 hardware remain untested. Failure injection
+Live secondary-taskbar creation/removal, physical monitor hot-plug/mixed-DPI
+behavior and ARM64 hardware remain untested. Failure injection
 covers repeated revocation failures followed by recovery, not arbitrary permanent
 COM failures or an inaccessible owner thread. Those failures still report an
 incomplete teardown and retain outstanding cleanup state.

@@ -304,9 +304,23 @@ void SecondaryUiChecks(const std::wstring& folder,
                 if (copy->model != oldModel)
                     throw std::runtime_error("Stopped copy received a queued timer callback");
                 SyncCopyContext retriedRemoval{test.window, {}, {}, true};
+                // Pause at the property-removal boundary while an engine thread
+                // retires the now-propertyless HWND, as mod unload can do.
+                g_copyPropertyRemovedTestHook = [](HWND window) {
+                    std::thread engine([window] { RetireDeadCopyWindow(window); });
+                    engine.join();
+                };
                 SyncCopyOnOwner(&retriedRemoval);
+                g_copyPropertyRemovedTestHook = nullptr;
+                if (!g_pendingCopyCleanup.empty()) {
+                    // The broken order queues the just-deleted controller. Do
+                    // not dereference it while reporting the regression.
+                    g_pendingCopyCleanup.clear();
+                    throw std::runtime_error("Unload queued a deleted secondary controller");
+                }
                 if (!retriedRemoval.succeeded)
                     throw std::runtime_error("Secondary callback revoke retry failed");
+                std::wcout << L"PASS: concurrent unload cannot queue a removed controller\n";
                 std::wcout << L"PASS: secondary callback revoke failure retains state and retries\n";
                 if (FindWidgetCopy(test.window) || root.Children().Size()!=1)
                     throw std::runtime_error("secondary detach leaked host or subclass");
@@ -389,14 +403,20 @@ void SecondaryUiChecks(const std::wstring& folder,
                 Grid deferredRoot;
                 AttachSecondaryWidget(destroyed, deferredRoot);
                 g_borderRevokeTestHook = [](DependencyProperty const&) { throw hresult_error(E_FAIL); };
+                g_copyPropertyRemovedTestHook = [](HWND window) {
+                    std::thread engine([window] { RetireDeadCopyWindow(window); });
+                    engine.join();
+                };
                 DestroyWindow(destroyed);
+                g_copyPropertyRemovedTestHook = nullptr;
                 auto deadCopies = CopyWindows();
-                if (g_pendingCopyCleanup.empty() ||
+                if (g_pendingCopyCleanup.size() != 1 ||
                     std::find(deadCopies.begin(), deadCopies.end(), destroyed) != deadCopies.end())
-                    throw std::runtime_error("Destroyed copy lost its owner-thread retry state");
+                    throw std::runtime_error("Concurrent destroy did not retain exactly one cleanup owner");
                 g_borderRevokeTestHook = nullptr;
                 if (!RetryPendingCopyCleanup() || !g_pendingCopyCleanup.empty() || deferredRoot.Children().Size())
                     throw std::runtime_error("Deferred destroyed copy did not finish XAML cleanup");
+                std::wcout << L"PASS: concurrent unload and native destroy retain one cleanup owner\n";
 
                 // The subclass can already be removed when the HWND dies.
                 destroyed = CreateWindowExW(0, L"STATIC", L"", WS_POPUP,

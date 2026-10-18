@@ -40,6 +40,22 @@ inject(
     "if (g_secondaryAttachTestHook) g_secondaryAttachTestHook();\n"
     "        if (!SetTimer(window, kCopySubclass, 1000, nullptr))",
 )
+inject(
+    "bool RemoveWidgetCopy(HWND window) {",
+    "void (*g_copyPropertyRemovedTestHook)(HWND) = nullptr;\n"
+    "HANDLE RemoveCopyPropertyForTest(HWND window, LPCWSTR name) {\n"
+    "    auto value = RemovePropW(window, name);\n"
+    "    if (g_copyPropertyRemovedTestHook) g_copyPropertyRemovedTestHook(window);\n"
+    "    return value;\n"
+    "}\n"
+    "bool RemoveWidgetCopy(HWND window) {",
+)
+copy_property_removal = "RemovePropW(window, kCopyProperty);"
+if source.count(copy_property_removal) != 3:
+    raise RuntimeError("Copy-property removal injection anchors changed")
+source = source.replace(
+    copy_property_removal, "RemoveCopyPropertyForTest(window, kCopyProperty);"
+)
 output = ROOT / "build-ui-smoke" / "instrumented-mod.wh.cpp"
 output.parent.mkdir(parents=True, exist_ok=True)
 output.write_text(source, encoding="utf-8", newline="\n")
