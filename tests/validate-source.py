@@ -150,7 +150,7 @@ def main() -> int:
 
     expected = {
         "id": "taskbar-system-info",
-        "version": "1.8.1",
+        "version": "1.9.0",
         "author": "Yevhenii Starychenko",
         "github": "https://github.com/starychenko",
         "license": "GPL-3.0",
@@ -165,7 +165,15 @@ def main() -> int:
     assert metadata.get("description:uk-UA")
 
     settings = parse_settings(extract_block(source, "WindhawkModSettings"))
-    assert len(settings) == 32, f"Expected 32 settings, got {len(settings)}"
+    assert len(settings) == 35, f"Expected 35 settings, got {len(settings)}"
+    layout = next(item for item in settings if "preferredLayout" in item)
+    assert layout["preferredLayout"] == "full"
+    for key in ("$options", "$options:uk-UA"):
+        assert {next(iter(option)) for option in layout[key]} == {
+            "full", "noGraphs", "compactTwoRows", "compactOneRow"
+        }
+    for key in ("showCpuGraph", "showGpuGraph"):
+        assert next(item for item in settings if key in item)[key] is True
     assert next(item for item in settings if "moveHotkey" in item)["moveHotkey"] == ""
 
     setting_keys: set[str] = set()

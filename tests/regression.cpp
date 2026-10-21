@@ -312,6 +312,8 @@ void NetworkLayouts() {
     Check(SameWidgetLayout(preview.widget, normal.layout), "the move preview shares the network layout");
 }
 
+#include "preferred-layout.inc.cpp"
+
 void ResponsiveLayouts() {
     ModSettings settings; settings.width = 410; settings.reserveSpace = false;
     WidgetFontMetrics font;
@@ -1587,6 +1589,8 @@ int main() {
         AdaptivePlacement();
         std::cout << "PASS: adaptive placement, DPI matrix, reservation bounds and restoration\n";
         ResponsiveLayouts();
+        PreferredLayouts();
+        std::cout << "PASS: preferred layouts, visibility, width savings, fallback, restoration and drag matrix\n";
         std::cout << "PASS: responsive layouts, essential fields and destination preview matrix\n";
         NetworkSampling();
         NetworkLayouts();
