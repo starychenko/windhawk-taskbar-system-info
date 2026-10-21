@@ -134,6 +134,7 @@ struct SecondaryTestContext {
     std::string error;
 };
 bool CompositionBorderChecks(Grid host);
+#include "preferred-layout-ui.inc.cpp"
 
 void SecondaryUiChecks(const std::wstring& folder,
                        std::shared_ptr<const ModSettings> settings,
@@ -210,6 +211,7 @@ void SecondaryUiChecks(const std::wstring& folder,
                         copy->view.netRows[1].Visibility() != Visibility::Visible)
                         throw std::runtime_error("secondary network values or unit switching lost");
                 }
+                SecondaryPreferenceChecks(*copy, root, test.settings);
                 // Exercise the shared high-contrast styling contract without
                 // changing the user's Windows accessibility settings.
                 std::array<SolidColorBrush, 3> contrastPalette{
@@ -668,9 +670,33 @@ int wmain(int argc, wchar_t** argv) {
                 settleDock();
             }
             dockSettings->showNetwork = false; dockSettings->networkBits = false;
+            for (int setting = 0; setting < 4; ++setting) {
+                g_reservationRejected = true;
+                if (setting == 0) dockSettings->preferredLayout = WidgetLayoutMode::NoGraphs;
+                if (setting == 1) dockSettings->temperatureSource = TemperatureSource::Disabled;
+                if (setting == 2) dockSettings->showCpuGraph = false;
+                if (setting == 3) dockSettings->showGpuGraph = false;
+                ApplyTaskbarPlacement(*dockSettings);
+                if (g_reservationRejected)
+                    throw std::runtime_error("Content setting did not invalidate rejected reservation");
+                settleDock();
+            }
+            dockSettings->preferredLayout = WidgetLayoutMode::Full;
+            dockSettings->temperatureSource = TemperatureSource::Auto;
+            dockSettings->showCpuGraph = dockSettings->showGpuGraph = true;
             scene.Width(1200); settleDock();
             if (g_widgetHost.Visibility() != Visibility::Visible)
                 throw std::runtime_error("An expanded dock does not recover after shrink/grow");
+            double fullReservation = g_reservedMargin;
+            dockSettings->preferredLayout = WidgetLayoutMode::NoGraphs;
+            dockSettings->temperatureSource = TemperatureSource::Disabled;
+            settleDock();
+            if (g_widgetHost.Visibility() != Visibility::Visible ||
+                g_reservedMargin <= 0 || g_reservedMargin >= fullReservation - 1)
+                throw std::runtime_error("Compact content does not release actual reserved dock space");
+            dockSettings->preferredLayout = WidgetLayoutMode::Full;
+            dockSettings->temperatureSource = TemperatureSource::Auto;
+            settleDock();
             // DockLike uses padding; other presets add a border as well.
             dockRoot.Padding(Thickness{6, 2, 6, 2});
             dockRoot.BorderThickness(Thickness{1, 1, 1, 1});
@@ -854,6 +880,7 @@ int wmain(int argc, wchar_t** argv) {
             g_settings = initialSettings; ApplyWidgetSettings();
             std::wcout << L"PASS: optional network XAML cells, units, layouts, preview and disable\n";
         }
+        PrimaryPreferenceChecks(frame, root, initialSettings, argv[1]);
         struct Scenario { PCWSTR name; int width; int height; int font; bool light; bool unavailable; };
         const Scenario cases[] = {
             {L"dark-410x48.png", 410, 48, 11, false, false},
@@ -1596,7 +1623,7 @@ int wmain(int argc, wchar_t** argv) {
             auto sequence = g_lastRenderedMetricsSequence;
             bool fits = false; VerifyMovedWidget(&fits);
             if (!fits || endX(g_cpuGraph) > cpuEnd + .1f || endX(g_gpuGraph) > gpuEnd + .1f ||
-                cpuEnd <= 0 || gpuEnd <= 0 || cpuEnd >= g_graphWidth * .75 ||
+                cpuEnd <= 0 || gpuEnd <= 0 || cpuEnd >= g_widgetLayout->graphs[0].Width * .75 ||
                 g_lastRenderedMetricsSequence != sequence || g_cpuUsageText.Text() != L"--%")
                 throw std::runtime_error("Move verification rejuvenated stalled graph history");
             ApplyWidgetSettings();
