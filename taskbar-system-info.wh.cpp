@@ -88,7 +88,8 @@ snaps to a usable place. A red frame means the position cannot be saved.
 1. Install and enable the mod. CPU, GPU, RAM and VRAM usually work without
    additional software. See [Install](#install) for the current source.
 2. Leave **Temperature source** on **Automatic**. If a temperature stays at
-   `--°C`, check [Setting up HWiNFO temperatures](#setting-up-hwinfo-temperatures).
+   `--°C`, check [Setting up HWiNFO temperatures](#setting-up-hwinfo-temperatures)
+   or [Setting up LibreHardwareMonitor temperatures](#setting-up-librehardwaremonitor-temperatures).
 3. Set **Move widget hotkey** to an unused combination, press it, drag the widget
    along the taskbar, then press **Enter**.
    You can drag onto another monitor's taskbar too. **Esc** keeps the old position.
@@ -317,7 +318,8 @@ compatibility fix. A particular Taskbar Styler preset still needs a live check.
 - GPU usage and memory usage come from Windows performance counters. Adapter
   identity and memory capacity come from D3DKMT, with DXGI as the fallback.
 - RAM usage and capacity come from Windows memory status.
-- Temperatures come from HWiNFO or the Windows/driver interfaces listed below.
+- Temperatures come from HWiNFO, LibreHardwareMonitor, Core Temp or the
+  Windows/driver interfaces listed below.
 
 CPU and GPU graphs use a fixed 0-100% scale. History defaults to 60 seconds and
 can be set from 15 to 180 seconds. Readings default to a one-second interval;
@@ -351,16 +353,17 @@ not collect disk activity, send telemetry or make internet requests.
 ## Temperature providers
 
 **Automatic** fills CPU and GPU temperatures separately. It tries HWiNFO Shared
-Memory, then HWiNFO Gadget Registry, then the Windows fallback for any temperature
-that is still missing.
+Memory, then HWiNFO Gadget Registry, then LibreHardwareMonitor (local web
+server or WMI) and Core Temp Shared Memory, and finally the Windows fallback for
+any temperature that is still missing.
 
 | Temperature source | What it reads |
 | --- | --- |
-| **Automatic** | HWiNFO first, then Windows/driver readings for missing temperatures. |
+| **Automatic** | HWiNFO first, then LibreHardwareMonitor / Core Temp, then Windows/driver readings for missing temperatures. |
 | **HWiNFO automatic** | Shared Memory, then Gadget Registry. |
-| **HWiNFO Shared Memory** | `Global\HWiNFO_SENS_SM2` only. The shared-memory interface targets HWiNFO 7.0 or newer. |
+| **HWiNFO Shared Memory** | `Global\HWiNFO_SENS_SM2` first, with fallback to Core Temp Shared Memory and LibreHardwareMonitor for missing CPU temperature. |
 | **HWiNFO Gadget Registry** | `HKCU\Software\HWiNFO64\VSB` only. HWiNFO and Explorer must use the same Windows user. |
-| **Windows native** | GPU temperature from the selected display driver through D3DKMT; CPU fallback from Windows ACPI thermal zones through PDH. |
+| **Windows native** | GPU temperature from the selected display driver through D3DKMT; CPU fallback from Windows ACPI thermal zones through PDH (plus LibreHardwareMonitor / Core Temp if no thermal zones exist). |
 | **Disabled** | Skips temperature collection and removes both temperature fields and their width. Usage, memory and enabled graphs keep working. |
 
 Windows thermal zones can describe a motherboard, chassis, skin or
@@ -369,12 +372,13 @@ processor-related sensor. They are not always the CPU package temperature.
 zone aggregation** uses their average by default, or the hottest zone if selected.
 The Windows CPU fallback stays unavailable if the system exposes no thermal zones.
 
-HWiNFO is optional and is not bundled with the mod. Automatic CPU matching
-prefers `CPU (Tctl/Tdie)`, `CPU Die (average)` or `CPU Package`; GPU matching
-prefers `GPU Temperature` for the selected adapter. On a multi-GPU system, use
-the adapter and temperature filters if automatic matching picks the wrong sensor.
-If Windows has never supplied an adapter identity and no adapter filter is set,
-HWiNFO uses its generic GPU-temperature match.
+HWiNFO, LibreHardwareMonitor and Core Temp are optional and are not bundled with
+the mod. Automatic CPU matching prefers `CPU (Tctl/Tdie)`, `CPU Die (average)`,
+`CPU Package` or `Core Max`; GPU matching prefers `GPU Temperature` for the
+selected adapter. On a multi-GPU system, use the adapter and temperature filters
+if automatic matching picks the wrong sensor. If Windows has never supplied an
+adapter identity and no adapter filter is set, generic GPU-temperature matching
+is used.
 
 An unavailable reading shows `--°C`. An old temperature is not kept as a current
 reading. One missing provider does not stop the other metrics.
@@ -420,6 +424,23 @@ The [HWiNFO author's setup note](https://www.hwinfo.com/forum/threads/hwinfomoni
 explains the Gadget tab and the registry location. If the wrong sensor is chosen,
 set **CPU temperature sensor filter** or **GPU temperature sensor filter** to a
 distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
+
+## Setting up LibreHardwareMonitor temperatures
+
+LibreHardwareMonitor is an open-source alternative without a 12-hour session
+limit:
+
+1. Run **LibreHardwareMonitor** as administrator so its hardware driver can read
+   CPU package sensors.
+2. For LibreHardwareMonitor 0.9.6 or newer, enable **Options → Remote Web Server
+   → Run** (default port `8085`). Older versions with `ROOT\LibreHardwareMonitor`
+   WMI work automatically without enabling the web server.
+3. Optional: enable **Run On Windows Startup**, **Start Minimized**, **Minimize
+   To Tray** and **Minimize On Close** under **Options**.
+4. Keep the mod's **Temperature source** on **Automatic**.
+
+**Core Temp** is also supported automatically when its **Enable global shared
+memory** option is enabled.
 
 ## Settings guide
 
@@ -470,8 +491,8 @@ distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
 | **Temperature source** | The provider modes listed above; default: Automatic. |
 | **Windows thermal zone filter** | Partial zone name for the Windows CPU fallback. |
 | **Windows thermal zone aggregation** | Average or Hottest; default: Average. |
-| **CPU temperature sensor filter** | Partial HWiNFO CPU sensor name. |
-| **GPU temperature sensor filter** | Partial HWiNFO GPU sensor name. |
+| **CPU temperature sensor filter** | Partial HWiNFO or LibreHardwareMonitor CPU sensor name. |
+| **GPU temperature sensor filter** | Partial HWiNFO or LibreHardwareMonitor GPU sensor name. |
 
 Manual text, graph and alert colors apply when adaptive colors are off. A critical
 threshold is kept above its warning threshold. Alerts only change the display.
@@ -480,8 +501,8 @@ threshold is kept above its warning threshold. Alerts only change the display.
 
 | What you see | What to check |
 | --- | --- |
-| Temperature stays at `--°C` | Windows may not expose that sensor. Configure HWiNFO and confirm it is running. Leave Automatic mode on. |
-| HWiNFO stops after about 12 hours | Re-enable Shared Memory, use Gadget Registry or let Automatic use Windows readings. |
+| Temperature stays at `--°C` | Windows may not expose that sensor. Configure HWiNFO, LibreHardwareMonitor or Core Temp and confirm it is running. Leave Automatic mode on. |
+| HWiNFO stops after about 12 hours | Re-enable Shared Memory, use Gadget Registry, switch to LibreHardwareMonitor / Core Temp, or let Automatic use Windows readings. |
 | GPU temperature belongs to another card | Set GPU adapter filter, then GPU temperature sensor filter if needed. |
 | GPU or VRAM stays at `--` after a driver update | Allow up to one minute for adapter refresh or a fresh-counter probe, plus a few samples to establish a baseline. Check the Windhawk log; reload the mod if Windows still supplies no valid readings. |
 | Integrated-GPU memory looks too large | Automatic shows the Windows shared-memory limit. Select Dedicated VRAM only if you want the reserved carve-out. |
@@ -738,8 +759,8 @@ Released under [GPL-3.0](https://github.com/starychenko/windhawk-taskbar-system-
 - temperatureSource: auto
   $name: Temperature source
   $name:uk-UA: Джерело температури
-  $description: "Automatic is recommended: it tries both HWiNFO interfaces, then Windows D3DKMT for a missing GPU reading and Windows thermal zones for a missing CPU reading. Disabled hides both temperature fields and frees their space. HWiNFO is optional but must be running and configured as explained on the Details page."
-  $description:uk-UA: "Рекомендовано Автоматично: режим перевіряє обидва інтерфейси HWiNFO, потім Windows D3DKMT для відсутньої температури GPU та термозони Windows для CPU. Вимкнено приховує обидва поля температури та звільняє їхнє місце. HWiNFO необовязковий, але має працювати й бути налаштований за інструкцією на сторінці Деталі."
+  $description: "Automatic is recommended: it tries both HWiNFO interfaces, then LibreHardwareMonitor and Core Temp, then Windows D3DKMT for a missing GPU reading and Windows thermal zones for a missing CPU reading. Disabled hides both temperature fields and frees their space. External monitors are optional but must be running and configured as explained on the Details page."
+  $description:uk-UA: "Рекомендовано Автоматично: режим перевіряє обидва інтерфейси HWiNFO, далі LibreHardwareMonitor і Core Temp, потім Windows D3DKMT для відсутньої температури GPU та термозони Windows для CPU. Вимкнено приховує обидва поля температури та звільняє їхнє місце. Зовнішні монітори необовязкові, але мають працювати й бути налаштовані за інструкцією на сторінці Деталі."
   $options:
   - auto: Automatic
   - hwinfoAuto: HWiNFO automatic
@@ -776,14 +797,14 @@ Released under [GPL-3.0](https://github.com/starychenko/windhawk-taskbar-system-
 - cpuTempSensor: ""
   $name: CPU temperature sensor filter
   $name:uk-UA: Датчик температури CPU
-  $description: "Optional partial HWiNFO sensor name. Empty automatically selects CPU (Tctl/Tdie), CPU Die, or CPU Package. Set this only when automatic selection chooses the wrong sensor."
-  $description:uk-UA: "Необов'язкова частина назви датчика HWiNFO. Порожнє значення автоматично вибирає CPU (Tctl/Tdie), CPU Die або CPU Package. Заповнюйте лише коли автоматично вибрано не той датчик."
+  $description: "Optional partial HWiNFO or LibreHardwareMonitor sensor name. Empty automatically selects CPU (Tctl/Tdie), CPU Die, CPU Package, or Core Max. Set this only when automatic selection chooses the wrong sensor."
+  $description:uk-UA: "Необов'язкова частина назви датчика HWiNFO або LibreHardwareMonitor. Порожнє значення автоматично вибирає CPU (Tctl/Tdie), CPU Die, CPU Package або Core Max. Заповнюйте лише коли автоматично вибрано не той датчик."
 
 - gpuTempSensor: ""
   $name: GPU temperature sensor filter
   $name:uk-UA: Датчик температури GPU
-  $description: "Optional partial HWiNFO sensor name. Empty automatically selects GPU Temperature for the selected Windows adapter. Set this only when automatic selection chooses the wrong sensor."
-  $description:uk-UA: "Необов'язкова частина назви датчика HWiNFO. Порожнє значення автоматично вибирає GPU Temperature для вибраного адаптера Windows. Заповнюйте лише коли автоматично вибрано не той датчик."
+  $description: "Optional partial HWiNFO or LibreHardwareMonitor sensor name. Empty automatically selects GPU Temperature for the selected Windows adapter. Set this only when automatic selection chooses the wrong sensor."
+  $description:uk-UA: "Необов'язкова частина назви датчика HWiNFO або LibreHardwareMonitor. Порожнє значення автоматично вибирає GPU Temperature для вибраного адаптера Windows. Заповнюйте лише коли автоматично вибрано не той датчик."
 */
 // ==/WindhawkModSettings==
 
@@ -795,6 +816,7 @@ Released under [GPL-3.0](https://github.com/starychenko/windhawk-taskbar-system-
 #include <windows.h>
 #include <commctrl.h>
 #include <objidl.h>
+#include <wbemidl.h>
 #include <gdiplus.h>
 // Keep Winsock definitions before IP Helper; the Windhawk headers depend on it.
 #include <winsock2.h>
@@ -901,6 +923,8 @@ enum class TemperatureProvider {
     None,
     HwInfoSharedMemory,
     HwInfoGadgetRegistry,
+    CoreTempSharedMemory,
+    LibreHardwareMonitor,
     WindowsD3dkmt,
     WindowsThermalZones,
 };
@@ -1333,7 +1357,8 @@ int CpuTemperatureScore(const std::wstring& sensorName,
 
     if (Contains(reading, L"vrm") || Contains(reading, L"ccd") ||
         Contains(reading, L"iod") || Contains(reading, L"soc") ||
-        Contains(reading, L"l3 cache")) {
+        Contains(reading, L"l3 cache") || Contains(reading, L"distance") ||
+        Contains(reading, L"tjmax")) {
         return -1;
     }
 
@@ -1346,11 +1371,17 @@ int CpuTemperatureScore(const std::wstring& sensorName,
     if (Contains(reading, L"cpu package")) {
         return 900;
     }
+    if (Contains(reading, L"core max")) {
+        return 880;
+    }
     if (Contains(reading, L"package temperature")) {
         return 850;
     }
     if (Contains(reading, L"cpu temperature")) {
         return 800;
+    }
+    if (Contains(reading, L"core average")) {
+        return 750;
     }
     if (Contains(reading, L"core temperatures")) {
         return 700;
@@ -2437,6 +2468,524 @@ void ReadWindowsThermalZones(MetricsSnapshot& snapshot,
 void ReadWindowsGpuTemperature(MetricsSnapshot& snapshot,
                                const ModSettings& settings);
 
+#pragma pack(push, 1)
+struct CoreTempSharedData {
+    uint32_t uiLoad[256];
+    uint32_t uiTjMax[128];
+    uint32_t uiCoreCnt;
+    uint32_t uiCPUCnt;
+    float fTemp[256];
+    float fVID;
+    float fCPUSpeed;
+    float fFSBSpeed;
+    float fMultiplier;
+    char sCPUName[100];
+    uint8_t ucFahrenheit;
+    uint8_t ucDeltaToTjMax;
+};
+#pragma pack(pop)
+
+void ReadCoreTempSharedMemory(MetricsSnapshot& snapshot) {
+    if (snapshot.cpuTemp) {
+        return;
+    }
+
+    constexpr PCWSTR kMappingNames[] = {
+        L"CoreTempMappingObjectEx",
+        L"Global\\CoreTempMappingObjectEx",
+        L"CoreTempMappingObject",
+        L"Global\\CoreTempMappingObject",
+    };
+
+    HANDLE mapping = nullptr;
+    for (PCWSTR name : kMappingNames) {
+        mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, name);
+        if (mapping) {
+            break;
+        }
+    }
+    if (!mapping) {
+        return;
+    }
+
+    const void* view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!view) {
+        CloseHandle(mapping);
+        return;
+    }
+
+    CoreTempSharedData data{};
+    bool copied = false;
+    MEMORY_BASIC_INFORMATION memoryInfo{};
+    if (VirtualQuery(view, &memoryInfo, sizeof(memoryInfo)) ==
+            sizeof(memoryInfo) &&
+        memoryInfo.RegionSize >= sizeof(CoreTempSharedData)) {
+        const auto* base = static_cast<const uint8_t*>(memoryInfo.BaseAddress);
+        const auto* current = static_cast<const uint8_t*>(view);
+        if (current >= base &&
+            static_cast<size_t>(current - base) <= memoryInfo.RegionSize &&
+            memoryInfo.RegionSize - static_cast<size_t>(current - base) >=
+                sizeof(CoreTempSharedData)) {
+            std::memcpy(&data, view, sizeof(CoreTempSharedData));
+            copied = true;
+        }
+    }
+    UnmapViewOfFile(view);
+    CloseHandle(mapping);
+
+    if (!copied || data.uiLoad[0] == kHwInfoSignature ||
+        data.uiCoreCnt == 0 || data.uiCoreCnt > 256 ||
+        data.uiCPUCnt == 0 || data.uiCPUCnt > 128 ||
+        data.ucFahrenheit > 1 || data.ucDeltaToTjMax > 1 ||
+        data.sCPUName[0] == '\0') {
+        return;
+    }
+
+    size_t corePerCpu = static_cast<size_t>(data.uiCoreCnt);
+    size_t totalCores = std::min<size_t>(
+        corePerCpu * static_cast<size_t>(data.uiCPUCnt),
+        std::size(data.fTemp));
+
+    std::optional<double> maxCelsius;
+    for (size_t i = 0; i < totalCores; ++i) {
+        double rawTemp = static_cast<double>(data.fTemp[i]);
+        if (!std::isfinite(rawTemp) || rawTemp <= 0.0) {
+            continue;
+        }
+        size_t cpuIdx = std::min<size_t>(i / corePerCpu,
+                                         std::size(data.uiTjMax) - 1);
+        if (data.ucDeltaToTjMax != 0 && data.uiTjMax[cpuIdx] > 0) {
+            rawTemp = static_cast<double>(data.uiTjMax[cpuIdx]) - rawTemp;
+        }
+        auto normalized = NormalizeTemperature(
+            rawTemp, data.ucFahrenheit != 0 ? L"F" : L"C");
+        if (normalized && *normalized > 0.0) {
+            maxCelsius = maxCelsius ? std::max(*maxCelsius, *normalized)
+                                    : *normalized;
+        }
+    }
+
+    if (maxCelsius) {
+        snapshot.cpuTemp = *maxCelsius;
+        snapshot.cpuTempProvider = TemperatureProvider::CoreTempSharedMemory;
+    }
+}
+
+SampleTime g_nextLhmWmiRetry{};
+SampleTime g_nextLhmHttpRetry{};
+
+std::optional<std::string> ExtractJsonStringField(std::string_view objectSlice,
+                                                  std::string_view key) {
+    size_t pos = objectSlice.find(key);
+    if (pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    pos = objectSlice.find(':', pos + key.size());
+    if (pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    pos = objectSlice.find('"', pos + 1);
+    if (pos == std::string_view::npos) {
+        return std::nullopt;
+    }
+    size_t start = pos + 1;
+    std::string result;
+    for (size_t i = start; i < objectSlice.size(); ++i) {
+        if (objectSlice[i] == '\\' && i + 1 < objectSlice.size()) {
+            result.push_back(objectSlice[++i]);
+        } else if (objectSlice[i] == '"') {
+            return result;
+        } else {
+            result.push_back(objectSlice[i]);
+        }
+    }
+    return std::nullopt;
+}
+
+std::wstring Utf8ToWideString(std::string_view value) {
+    if (value.empty()) {
+        return {};
+    }
+    int wideLength = MultiByteToWideChar(CP_UTF8, 0, value.data(),
+                                         static_cast<int>(value.size()),
+                                         nullptr, 0);
+    if (wideLength <= 0) {
+        return {};
+    }
+    std::wstring result(static_cast<size_t>(wideLength), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(),
+                        static_cast<int>(value.size()), result.data(),
+                        wideLength);
+    return result;
+}
+
+std::optional<double> ParseLhmFormattedTemperature(std::string_view valueStr) {
+    std::string normalized(valueStr);
+    for (char& ch : normalized) {
+        if (ch == ',') {
+            ch = '.';
+        }
+    }
+    const char* begin = normalized.data();
+    const char* end = begin + normalized.size();
+    while (begin < end && (*begin == ' ' || *begin == '\t')) {
+        ++begin;
+    }
+    double parsed = 0.0;
+    auto [ptr, ec] = std::from_chars(begin, end, parsed);
+    if (ec != std::errc{} || !std::isfinite(parsed)) {
+        return std::nullopt;
+    }
+    bool fahrenheit = normalized.find('F') != std::string::npos ||
+                      normalized.find('f') != std::string::npos;
+    return NormalizeTemperature(parsed, fahrenheit ? L"F" : L"C");
+}
+
+void ReadLibreHardwareMonitorHttp(
+    MetricsSnapshot& snapshot,
+    const ModSettings& settings,
+    const std::optional<std::wstring>& gpuAdapterName) {
+    if ((snapshot.cpuTemp && snapshot.gpuTemp) || !g_metricsWorker) {
+        return;
+    }
+    SampleTime now = SampleTime::clock::now();
+    if (now < g_nextLhmHttpRetry) {
+        return;
+    }
+
+    using HINTERNET = void*;
+    using INTERNET_PORT = uint16_t;
+    using WinHttpOpen_t =
+        HINTERNET(WINAPI*)(LPCWSTR, DWORD, LPCWSTR, LPCWSTR, DWORD);
+    using WinHttpSetTimeouts_t =
+        BOOL(WINAPI*)(HINTERNET, int, int, int, int);
+    using WinHttpConnect_t =
+        HINTERNET(WINAPI*)(HINTERNET, LPCWSTR, INTERNET_PORT, DWORD);
+    using WinHttpOpenRequest_t = HINTERNET(WINAPI*)(
+        HINTERNET, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR*, DWORD);
+    using WinHttpSendRequest_t = BOOL(WINAPI*)(
+        HINTERNET, LPCWSTR, DWORD, LPVOID, DWORD, DWORD, DWORD_PTR);
+    using WinHttpReceiveResponse_t = BOOL(WINAPI*)(HINTERNET, LPVOID);
+    using WinHttpReadData_t =
+        BOOL(WINAPI*)(HINTERNET, LPVOID, DWORD, LPDWORD);
+    using WinHttpCloseHandle_t = BOOL(WINAPI*)(HINTERNET);
+
+    static HMODULE winHttpMod = LoadLibraryExW(
+        L"winhttp.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!winHttpMod) {
+        g_nextLhmHttpRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+    static auto pWinHttpOpen = reinterpret_cast<WinHttpOpen_t>(
+        GetProcAddress(winHttpMod, "WinHttpOpen"));
+    static auto pWinHttpSetTimeouts = reinterpret_cast<WinHttpSetTimeouts_t>(
+        GetProcAddress(winHttpMod, "WinHttpSetTimeouts"));
+    static auto pWinHttpConnect = reinterpret_cast<WinHttpConnect_t>(
+        GetProcAddress(winHttpMod, "WinHttpConnect"));
+    static auto pWinHttpOpenRequest = reinterpret_cast<WinHttpOpenRequest_t>(
+        GetProcAddress(winHttpMod, "WinHttpOpenRequest"));
+    static auto pWinHttpSendRequest = reinterpret_cast<WinHttpSendRequest_t>(
+        GetProcAddress(winHttpMod, "WinHttpSendRequest"));
+    static auto pWinHttpReceiveResponse =
+        reinterpret_cast<WinHttpReceiveResponse_t>(
+            GetProcAddress(winHttpMod, "WinHttpReceiveResponse"));
+    static auto pWinHttpReadData = reinterpret_cast<WinHttpReadData_t>(
+        GetProcAddress(winHttpMod, "WinHttpReadData"));
+    static auto pWinHttpCloseHandle = reinterpret_cast<WinHttpCloseHandle_t>(
+        GetProcAddress(winHttpMod, "WinHttpCloseHandle"));
+
+    if (!pWinHttpOpen || !pWinHttpSetTimeouts || !pWinHttpConnect ||
+        !pWinHttpOpenRequest || !pWinHttpSendRequest ||
+        !pWinHttpReceiveResponse || !pWinHttpReadData ||
+        !pWinHttpCloseHandle) {
+        g_nextLhmHttpRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+
+    HINTERNET session = pWinHttpOpen(L"TaskbarSystemInfo/1.0", 1, nullptr,
+                                     nullptr, 0);
+    if (!session) {
+        g_nextLhmHttpRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+    pWinHttpSetTimeouts(session, 200, 200, 400, 400);
+
+    HINTERNET connect = pWinHttpConnect(session, L"127.0.0.1", 8085, 0);
+    HINTERNET request =
+        connect ? pWinHttpOpenRequest(connect, L"GET", L"/data.json", nullptr,
+                                      nullptr, nullptr, 0)
+                : nullptr;
+
+    std::string body;
+    if (request &&
+        pWinHttpSendRequest(request, nullptr, 0, nullptr, 0, 0, 0) &&
+        pWinHttpReceiveResponse(request, nullptr)) {
+        char chunk[4096];
+        DWORD bytesRead = 0;
+        while (pWinHttpReadData(request, chunk, sizeof(chunk), &bytesRead) &&
+               bytesRead > 0) {
+            body.append(chunk, bytesRead);
+            if (body.size() > 2 * 1024 * 1024) {
+                break;
+            }
+        }
+    }
+
+    if (request) pWinHttpCloseHandle(request);
+    if (connect) pWinHttpCloseHandle(connect);
+    pWinHttpCloseHandle(session);
+
+    if (body.empty()) {
+        g_nextLhmHttpRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+
+    int bestCpuScore = -1;
+    std::optional<double> bestCpuTemp;
+    int bestGpuScore = -1;
+    std::optional<double> bestGpuTemp;
+
+    std::string_view view(body);
+    size_t searchPos = 0;
+    while (true) {
+        size_t typePos = view.find("\"Temperature\"", searchPos);
+        if (typePos == std::string_view::npos) {
+            break;
+        }
+        searchPos = typePos + 13;
+
+        size_t objStart = view.rfind('{', typePos);
+        size_t objEnd = view.find('}', typePos);
+        if (objStart == std::string_view::npos ||
+            objEnd == std::string_view::npos || objEnd <= objStart ||
+            objEnd - objStart > 1024) {
+            continue;
+        }
+
+        std::string_view slice = view.substr(objStart, objEnd - objStart + 1);
+        auto typeVal = ExtractJsonStringField(slice, "\"Type\"");
+        if (!typeVal || *typeVal != "Temperature") {
+            continue;
+        }
+        auto textVal = ExtractJsonStringField(slice, "\"Text\"");
+        auto sensorIdVal = ExtractJsonStringField(slice, "\"SensorId\"");
+        auto valueVal = ExtractJsonStringField(slice, "\"Value\"");
+        if (!textVal || !sensorIdVal || !valueVal) {
+            continue;
+        }
+
+        auto tempCelsius = ParseLhmFormattedTemperature(*valueVal);
+        if (!tempCelsius || *tempCelsius <= 0.0) {
+            continue;
+        }
+
+        std::wstring sensorIdWide = Utf8ToWideString(*sensorIdVal);
+        std::wstring textWide = Utf8ToWideString(*textVal);
+        if (!snapshot.cpuTemp) {
+            int cpuScore = CpuTemperatureScore(sensorIdWide, textWide,
+                                               settings.cpuTempSensor);
+            if (cpuScore > bestCpuScore ||
+                (cpuScore == bestCpuScore && cpuScore >= 0 && bestCpuTemp &&
+                 *tempCelsius > *bestCpuTemp)) {
+                bestCpuScore = cpuScore;
+                bestCpuTemp = *tempCelsius;
+            }
+        }
+        if (!snapshot.gpuTemp) {
+            int gpuScore = GpuTemperatureScore(sensorIdWide, textWide,
+                                               settings.gpuTempSensor,
+                                               gpuAdapterName);
+            if (gpuScore > bestGpuScore) {
+                bestGpuScore = gpuScore;
+                bestGpuTemp = *tempCelsius;
+            }
+        }
+    }
+
+    if (!snapshot.cpuTemp && bestCpuTemp) {
+        snapshot.cpuTemp = *bestCpuTemp;
+        snapshot.cpuTempProvider = TemperatureProvider::LibreHardwareMonitor;
+    }
+    if (!snapshot.gpuTemp && bestGpuTemp) {
+        snapshot.gpuTemp = *bestGpuTemp;
+        snapshot.gpuTempProvider = TemperatureProvider::LibreHardwareMonitor;
+    }
+
+    if (!bestCpuTemp && !bestGpuTemp) {
+        g_nextLhmHttpRetry = now + kHwInfoUnavailableRetryInterval;
+    } else {
+        g_nextLhmHttpRetry = {};
+    }
+}
+
+void ReadLibreHardwareMonitorWmi(
+    MetricsSnapshot& snapshot,
+    const ModSettings& settings,
+    const std::optional<std::wstring>& gpuAdapterName) {
+    ReadLibreHardwareMonitorHttp(snapshot, settings, gpuAdapterName);
+    if (snapshot.cpuTemp && snapshot.gpuTemp) {
+        return;
+    }
+    if (!g_metricsWorker) {
+        return;
+    }
+    SampleTime now = SampleTime::clock::now();
+    if (now < g_nextLhmWmiRetry) {
+        return;
+    }
+
+    HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool shouldUninit = SUCCEEDED(coHr);
+    struct CoGuard {
+        bool active;
+        ~CoGuard() {
+            if (active) {
+                CoUninitialize();
+            }
+        }
+    } coGuard{shouldUninit};
+
+    static constexpr GUID kClsidWbemLocator = {
+        0x4590f811, 0x1d3a, 0x11d0,
+        {0x89, 0x1f, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24}};
+    static constexpr GUID kIidIWbemLocator = {
+        0xdc12a687, 0x737f, 0x11cf,
+        {0x88, 0x4d, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24}};
+
+    com_ptr<IWbemLocator> locator;
+    if (FAILED(CoCreateInstance(kClsidWbemLocator, nullptr,
+                                CLSCTX_INPROC_SERVER, kIidIWbemLocator,
+                                locator.put_void())) ||
+        !locator) {
+        g_nextLhmWmiRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+
+    constexpr PCWSTR kNamespaces[] = {
+        L"ROOT\\LibreHardwareMonitor",
+        L"ROOT\\OpenHardwareMonitor",
+    };
+
+    com_ptr<IWbemServices> services;
+    for (PCWSTR nsName : kNamespaces) {
+        BSTR ns = SysAllocString(nsName);
+        if (!ns) {
+            continue;
+        }
+        HRESULT hr = locator->ConnectServer(ns, nullptr, nullptr, nullptr, 0,
+                                            nullptr, nullptr, services.put());
+        SysFreeString(ns);
+        if (SUCCEEDED(hr) && services) {
+            break;
+        }
+    }
+
+    if (!services) {
+        g_nextLhmWmiRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+
+    CoSetProxyBlanket(services.get(), RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE,
+                      nullptr, RPC_C_AUTHN_LEVEL_CALL,
+                      RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE);
+
+    BSTR queryLang = SysAllocString(L"WQL");
+    BSTR query = SysAllocString(
+        L"SELECT Name, Parent, Value FROM Sensor WHERE SensorType = 'Temperature'");
+    com_ptr<IEnumWbemClassObject> enumerator;
+    HRESULT hr = (queryLang && query)
+                     ? services->ExecQuery(
+                           queryLang, query,
+                           WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                           nullptr, enumerator.put())
+                     : E_OUTOFMEMORY;
+    SysFreeString(query);
+    SysFreeString(queryLang);
+    if (FAILED(hr) || !enumerator) {
+        g_nextLhmWmiRetry = now + kHwInfoUnavailableRetryInterval;
+        return;
+    }
+
+    int bestCpuScore = -1;
+    std::optional<double> bestCpuTemp;
+    int bestGpuScore = -1;
+    std::optional<double> bestGpuTemp;
+
+    while (true) {
+        com_ptr<IWbemClassObject> sensorObj;
+        ULONG returned = 0;
+        if (FAILED(enumerator->Next(1000, 1, sensorObj.put(), &returned)) ||
+            !returned || !sensorObj) {
+            break;
+        }
+
+        VARIANT nameVar{};
+        VARIANT parentVar{};
+        VARIANT valueVar{};
+        VariantInit(&nameVar);
+        VariantInit(&parentVar);
+        VariantInit(&valueVar);
+
+        if (SUCCEEDED(sensorObj->Get(L"Name", 0, &nameVar, nullptr, nullptr)) &&
+            SUCCEEDED(sensorObj->Get(L"Parent", 0, &parentVar, nullptr, nullptr)) &&
+            SUCCEEDED(sensorObj->Get(L"Value", 0, &valueVar, nullptr, nullptr)) &&
+            nameVar.vt == VT_BSTR && nameVar.bstrVal &&
+            parentVar.vt == VT_BSTR && parentVar.bstrVal) {
+            std::optional<double> rawVal;
+            if (valueVar.vt == VT_R4) {
+                rawVal = static_cast<double>(valueVar.fltVal);
+            } else if (valueVar.vt == VT_R8) {
+                rawVal = valueVar.dblVal;
+            }
+            if (rawVal) {
+                auto normalized = NormalizeTemperature(*rawVal, L"C");
+                if (normalized && *normalized > 0.0) {
+                    std::wstring parentStr(parentVar.bstrVal);
+                    std::wstring nameStr(nameVar.bstrVal);
+                    if (!snapshot.cpuTemp) {
+                        int cpuScore = CpuTemperatureScore(
+                            parentStr, nameStr, settings.cpuTempSensor);
+                        if (cpuScore > bestCpuScore ||
+                            (cpuScore == bestCpuScore && cpuScore >= 0 &&
+                             bestCpuTemp && *normalized > *bestCpuTemp)) {
+                            bestCpuScore = cpuScore;
+                            bestCpuTemp = *normalized;
+                        }
+                    }
+                    if (!snapshot.gpuTemp) {
+                        int gpuScore = GpuTemperatureScore(
+                            parentStr, nameStr, settings.gpuTempSensor,
+                            gpuAdapterName);
+                        if (gpuScore > bestGpuScore) {
+                            bestGpuScore = gpuScore;
+                            bestGpuTemp = *normalized;
+                        }
+                    }
+                }
+            }
+        }
+
+        VariantClear(&valueVar);
+        VariantClear(&parentVar);
+        VariantClear(&nameVar);
+    }
+
+    if (!snapshot.cpuTemp && bestCpuTemp) {
+        snapshot.cpuTemp = *bestCpuTemp;
+        snapshot.cpuTempProvider = TemperatureProvider::LibreHardwareMonitor;
+    }
+    if (!snapshot.gpuTemp && bestGpuTemp) {
+        snapshot.gpuTemp = *bestGpuTemp;
+        snapshot.gpuTempProvider = TemperatureProvider::LibreHardwareMonitor;
+    }
+
+    if (!bestCpuTemp && !bestGpuTemp) {
+        g_nextLhmWmiRetry = now + kHwInfoUnavailableRetryInterval;
+    } else {
+        g_nextLhmWmiRetry = {};
+    }
+}
+
 void ReadHwInfoTemperatures(MetricsSnapshot& snapshot,
                             const ModSettings& settings,
                             const std::optional<std::wstring>& gpuAdapterName,
@@ -2486,6 +3035,12 @@ void ReadTemperatures(MetricsSnapshot& snapshot,
             usedHwInfo = true;
             ReadHwInfoSharedMemory(snapshot, settings, gpuAdapterName,
                                    hwInfoDiagnostics);
+            if (!snapshot.cpuTemp) {
+                ReadCoreTempSharedMemory(snapshot);
+            }
+            if (!snapshot.cpuTemp) {
+                ReadLibreHardwareMonitorWmi(snapshot, settings, gpuAdapterName);
+            }
             break;
 
         case TemperatureSource::GadgetRegistry:
@@ -2497,6 +3052,12 @@ void ReadTemperatures(MetricsSnapshot& snapshot,
         case TemperatureSource::WindowsNative:
             ReadWindowsGpuTemperature(snapshot, settings);
             ReadWindowsThermalZones(snapshot, settings);
+            if (!snapshot.cpuTemp) {
+                ReadLibreHardwareMonitorWmi(snapshot, settings, gpuAdapterName);
+            }
+            if (!snapshot.cpuTemp) {
+                ReadCoreTempSharedMemory(snapshot);
+            }
             break;
 
         case TemperatureSource::Disabled:
@@ -2515,6 +3076,12 @@ void ReadTemperatures(MetricsSnapshot& snapshot,
                                    hwInfoDiagnostics);
             if (!snapshot.gpuTemp) {
                 ReadWindowsGpuTemperature(snapshot, settings);
+            }
+            if (!snapshot.cpuTemp) {
+                ReadLibreHardwareMonitorWmi(snapshot, settings, gpuAdapterName);
+            }
+            if (!snapshot.cpuTemp) {
+                ReadCoreTempSharedMemory(snapshot);
             }
             if (!snapshot.cpuTemp) {
                 ReadWindowsThermalZones(snapshot, settings);
@@ -3757,6 +4324,10 @@ PCWSTR TemperatureProviderName(TemperatureProvider provider) {
             return L"HWiNFO Shared Memory";
         case TemperatureProvider::HwInfoGadgetRegistry:
             return L"HWiNFO Gadget Registry";
+        case TemperatureProvider::CoreTempSharedMemory:
+            return L"Core Temp Shared Memory";
+        case TemperatureProvider::LibreHardwareMonitor:
+            return L"LibreHardwareMonitor";
         case TemperatureProvider::WindowsD3dkmt:
             return L"Windows D3DKMT";
         case TemperatureProvider::WindowsThermalZones:
@@ -3852,6 +4423,8 @@ void MetricsWorkerProc() {
             InvalidateGpuAdapterCache();
             g_gpuTemperatureRetry = {};
             g_nextCpuPdhCounterRetry = {};
+            g_nextLhmWmiRetry = {};
+            g_nextLhmHttpRetry = {};
             EnsureCpuPdhQuery(*settings);
             EnsurePdhQuery();
             // No near-zero settings-change sample. The next measurement gets
@@ -10450,6 +11023,8 @@ void CloseMetricSources() {
     ClosePdhQuery();
     CloseCpuPdhQuery();
     g_nextCpuPdhCounterRetry = {};
+    g_nextLhmWmiRetry = {};
+    g_nextLhmHttpRetry = {};
     InvalidateGpuAdapterCache();
     g_gpuTemperatureRetry = {};
     g_hwInfoSharedMemoryCache = {};
