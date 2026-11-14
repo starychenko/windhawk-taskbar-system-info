@@ -35,7 +35,8 @@ snaps to a usable place. A red frame means the position cannot be saved.
 1. Install and enable the mod. CPU, GPU, RAM and VRAM usually work without
    additional software. See [Install](#install) for the current source.
 2. Leave **Temperature source** on **Automatic**. If a temperature stays at
-   `--°C`, check [Setting up HWiNFO temperatures](#setting-up-hwinfo-temperatures).
+   `--°C`, check [Setting up HWiNFO temperatures](#setting-up-hwinfo-temperatures)
+   or [Setting up LibreHardwareMonitor temperatures](#setting-up-librehardwaremonitor-temperatures).
 3. Set **Move widget hotkey** to an unused combination, press it, drag the widget
    along the taskbar, then press **Enter**.
    You can drag onto another monitor's taskbar too. **Esc** keeps the old position.
@@ -264,7 +265,8 @@ compatibility fix. A particular Taskbar Styler preset still needs a live check.
 - GPU usage and memory usage come from Windows performance counters. Adapter
   identity and memory capacity come from D3DKMT, with DXGI as the fallback.
 - RAM usage and capacity come from Windows memory status.
-- Temperatures come from HWiNFO or the Windows/driver interfaces listed below.
+- Temperatures come from HWiNFO, LibreHardwareMonitor, Core Temp or the
+  Windows/driver interfaces listed below.
 
 CPU and GPU graphs use a fixed 0-100% scale. History defaults to 60 seconds and
 can be set from 15 to 180 seconds. Readings default to a one-second interval;
@@ -298,16 +300,17 @@ not collect disk activity, send telemetry or make internet requests.
 ## Temperature providers
 
 **Automatic** fills CPU and GPU temperatures separately. It tries HWiNFO Shared
-Memory, then HWiNFO Gadget Registry, then the Windows fallback for any temperature
-that is still missing.
+Memory, then HWiNFO Gadget Registry, then LibreHardwareMonitor (local web
+server or WMI) and Core Temp Shared Memory, and finally the Windows fallback for
+any temperature that is still missing.
 
 | Temperature source | What it reads |
 | --- | --- |
-| **Automatic** | HWiNFO first, then Windows/driver readings for missing temperatures. |
+| **Automatic** | HWiNFO first, then LibreHardwareMonitor / Core Temp, then Windows/driver readings for missing temperatures. |
 | **HWiNFO automatic** | Shared Memory, then Gadget Registry. |
-| **HWiNFO Shared Memory** | `Global\HWiNFO_SENS_SM2` only. The shared-memory interface targets HWiNFO 7.0 or newer. |
+| **HWiNFO Shared Memory** | `Global\HWiNFO_SENS_SM2` first, with fallback to Core Temp Shared Memory and LibreHardwareMonitor for missing CPU temperature. |
 | **HWiNFO Gadget Registry** | `HKCU\Software\HWiNFO64\VSB` only. HWiNFO and Explorer must use the same Windows user. |
-| **Windows native** | GPU temperature from the selected display driver through D3DKMT; CPU fallback from Windows ACPI thermal zones through PDH. |
+| **Windows native** | GPU temperature from the selected display driver through D3DKMT; CPU fallback from Windows ACPI thermal zones through PDH (plus LibreHardwareMonitor / Core Temp if no thermal zones exist). |
 | **Disabled** | Skips temperature collection and removes both temperature fields and their width. Usage, memory and enabled graphs keep working. |
 
 Windows thermal zones can describe a motherboard, chassis, skin or
@@ -316,12 +319,13 @@ processor-related sensor. They are not always the CPU package temperature.
 zone aggregation** uses their average by default, or the hottest zone if selected.
 The Windows CPU fallback stays unavailable if the system exposes no thermal zones.
 
-HWiNFO is optional and is not bundled with the mod. Automatic CPU matching
-prefers `CPU (Tctl/Tdie)`, `CPU Die (average)` or `CPU Package`; GPU matching
-prefers `GPU Temperature` for the selected adapter. On a multi-GPU system, use
-the adapter and temperature filters if automatic matching picks the wrong sensor.
-If Windows has never supplied an adapter identity and no adapter filter is set,
-HWiNFO uses its generic GPU-temperature match.
+HWiNFO, LibreHardwareMonitor and Core Temp are optional and are not bundled with
+the mod. Automatic CPU matching prefers `CPU (Tctl/Tdie)`, `CPU Die (average)`,
+`CPU Package` or `Core Max`; GPU matching prefers `GPU Temperature` for the
+selected adapter. On a multi-GPU system, use the adapter and temperature filters
+if automatic matching picks the wrong sensor. If Windows has never supplied an
+adapter identity and no adapter filter is set, generic GPU-temperature matching
+is used.
 
 An unavailable reading shows `--°C`. An old temperature is not kept as a current
 reading. One missing provider does not stop the other metrics.
@@ -367,6 +371,23 @@ The [HWiNFO author's setup note](https://www.hwinfo.com/forum/threads/hwinfomoni
 explains the Gadget tab and the registry location. If the wrong sensor is chosen,
 set **CPU temperature sensor filter** or **GPU temperature sensor filter** to a
 distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
+
+## Setting up LibreHardwareMonitor temperatures
+
+LibreHardwareMonitor is an open-source alternative without a 12-hour session
+limit:
+
+1. Run **LibreHardwareMonitor** as administrator so its hardware driver can read
+   CPU package sensors.
+2. For LibreHardwareMonitor 0.9.6 or newer, enable **Options → Remote Web Server
+   → Run** (default port `8085`). Older versions with `ROOT\LibreHardwareMonitor`
+   WMI work automatically without enabling the web server.
+3. Optional: enable **Run On Windows Startup**, **Start Minimized**, **Minimize
+   To Tray** and **Minimize On Close** under **Options**.
+4. Keep the mod's **Temperature source** on **Automatic**.
+
+**Core Temp** is also supported automatically when its **Enable global shared
+memory** option is enabled.
 
 ## Settings reference
 
@@ -417,8 +438,8 @@ distinctive part of its HWiNFO name. Otherwise, leave the filters empty.
 | **Temperature source** | The provider modes listed above; default: Automatic. |
 | **Windows thermal zone filter** | Partial zone name for the Windows CPU fallback. |
 | **Windows thermal zone aggregation** | Average or Hottest; default: Average. |
-| **CPU temperature sensor filter** | Partial HWiNFO CPU sensor name. |
-| **GPU temperature sensor filter** | Partial HWiNFO GPU sensor name. |
+| **CPU temperature sensor filter** | Partial HWiNFO or LibreHardwareMonitor CPU sensor name. |
+| **GPU temperature sensor filter** | Partial HWiNFO or LibreHardwareMonitor GPU sensor name. |
 
 Manual text, graph and alert colors apply when adaptive colors are off. A critical
 threshold is kept above its warning threshold. Alerts only change the display.
@@ -427,8 +448,8 @@ threshold is kept above its warning threshold. Alerts only change the display.
 
 | What you see | What to check |
 | --- | --- |
-| Temperature stays at `--°C` | Windows may not expose that sensor. Configure HWiNFO and confirm it is running. Leave Automatic mode on. |
-| HWiNFO stops after about 12 hours | Re-enable Shared Memory, use Gadget Registry or let Automatic use Windows readings. |
+| Temperature stays at `--°C` | Windows may not expose that sensor. Configure HWiNFO, LibreHardwareMonitor or Core Temp and confirm it is running. Leave Automatic mode on. |
+| HWiNFO stops after about 12 hours | Re-enable Shared Memory, use Gadget Registry, switch to LibreHardwareMonitor / Core Temp, or let Automatic use Windows readings. |
 | GPU temperature belongs to another card | Set GPU adapter filter, then GPU temperature sensor filter if needed. |
 | GPU or VRAM stays at `--` after a driver update | Allow up to one minute for adapter refresh or a fresh-counter probe, plus a few samples to establish a baseline. Check the Windhawk log; reload the mod if Windows still supplies no valid readings. |
 | Integrated-GPU memory looks too large | Automatic shows the Windows shared-memory limit. Select Dedicated VRAM only if you want the reserved carve-out. |
